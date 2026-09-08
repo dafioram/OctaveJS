@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MatWeb — Lightweight MATLAB-Compatible Console</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="menubar" id="menubar">
+      <div class="menu-item" data-menu="file">
+        File
+        <div class="menu-dropdown" data-dropdown="file">
+          <button data-action="new-script">New script</button>
+          <button data-action="open-m">Open .m script…</button>
+          <button data-action="save-m">Save script as .m</button>
+          <div class="menu-sep"></div>
+          <button data-action="import-csv">Import CSV into workspace…</button>
+          <button data-action="open-mat">Load workspace (.mat)…</button>
+          <button data-action="save-mat">Save workspace (.mat)</button>
+        </div>
+      </div>
+      <div class="menu-item" data-menu="edit">
+        Edit
+        <div class="menu-dropdown" data-dropdown="edit">
+          <button data-action="clear-workspace">Clear workspace</button>
+          <button data-action="clear-console">Clear command window</button>
+          <button data-action="clear-history">Clear command history</button>
+        </div>
+      </div>
+      <div class="menu-item" data-menu="view">
+        View
+        <div class="menu-dropdown" data-dropdown="view">
+          <button data-action="focus-command">Command window</button>
+          <button data-action="focus-editor">Script editor</button>
+          <button data-action="focus-figures">Figures</button>
+        </div>
+      </div>
+      <div class="menu-item" data-menu="help">
+        Help
+        <div class="menu-dropdown" data-dropdown="help">
+          <button data-action="show-help">Supported functions &amp; limitations</button>
+          <button data-action="show-about">About MatWeb</button>
+        </div>
+      </div>
+      <div class="menubar-title">MatWeb</div>
+    </header>
+
+    <div class="body-grid">
+      <aside class="workspace-panel">
+        <nav class="sidebar-subtabs" id="sidebar-subtabs">
+          <button class="sidebar-subtab active" data-subtab="workspace">Workspace</button>
+          <button class="sidebar-subtab" data-subtab="history">History</button>
+        </nav>
+        <div class="sidebar-view active" data-subview="workspace">
+          <div class="workspace-list" id="workspace-list">
+            <div class="workspace-empty">No variables yet</div>
+          </div>
+        </div>
+        <div class="sidebar-view" data-subview="history">
+          <div class="history-list" id="history-list">
+            <div class="workspace-empty">No commands yet</div>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main-area">
+        <nav class="tab-bar" id="tab-bar">
+          <button class="tab-button active" data-tab="command">Command Window</button>
+          <button class="tab-button" data-tab="editor">Script Editor</button>
+          <button class="tab-button" data-tab="figures">Figures</button>
+        </nav>
+
+        <section class="tab-panel active" data-panel="command">
+          <div class="console-output" id="console-output"></div>
+          <div class="console-input-row">
+            <span class="console-prompt">&gt;&gt;</span>
+            <input type="text" id="console-input" class="console-input" autocomplete="off" spellcheck="false" placeholder="Type a command and press Enter…">
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="editor">
+          <div class="editor-toolbar">
+            <button data-action="run-script" class="btn btn-primary">Run</button>
+            <button data-action="run-selection" class="btn">Run selection</button>
+            <span class="editor-filename" id="editor-filename" title="Click to rename">untitled.m</span>
+          </div>
+          <div class="editor-mount" id="editor-mount"></div>
+        </section>
+
+        <section class="tab-panel" data-panel="figures">
+          <nav class="figure-tab-strip" id="figure-tab-strip"></nav>
+          <div class="figure-mount" id="figure-mount">
+            <div class="figure-empty">No figures yet — try <code>plot(1:10, sin(1:10))</code> in the Command Window.</div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal-box" id="modal-box"></div>
+  </div>
+
+  <input type="file" id="file-input-m" accept=".m" style="display:none">
+  <input type="file" id="file-input-csv" accept=".csv" style="display:none">
+  <input type="file" id="file-input-mat" accept=".mat" style="display:none">
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

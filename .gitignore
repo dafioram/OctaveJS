@@ -1,0 +1,24 @@
+# Dependencies (regenerate with `npm install`)
+node_modules/
+
+# Build output (regenerate with `npm run build`)
+# If you deploy by committing the built site (e.g. a GitHub Pages branch
+# that serves straight from a checked-in dist/), remove this line.
+dist/
+
+# Logs
+npm-debug.log*
+*.log
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Env / local overrides (not currently used, but standard to exclude)
+.env
+.env.local

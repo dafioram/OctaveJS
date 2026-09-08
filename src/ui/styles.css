@@ -1,0 +1,336 @@
+/* Design tokens ------------------------------------------------------
+   A light "engineering notebook / drafting table" aesthetic: warm paper
+   background, cobalt-blue drafting-pen accent, hairline rules instead of
+   shadowed cards, system font stacks throughout (no bundled font files,
+   so the offline bundle stays lean and typography never flashes/fails
+   to load). */
+:root {
+  --paper: #f6f4ee;
+  --panel: #fffdf9;
+  --ink: #2b2822;
+  --ink-muted: #6b655c;
+  --ink-faint: #948d7d;
+  --border: #dcd6c8;
+  --border-strong: #c7c0ae;
+  --blueprint: #1d4e89;
+  --blueprint-dark: #163d6b;
+  --blueprint-soft: #e7edf5;
+  --rust: #b4432e;
+  --rust-soft: #f7e9e5;
+  --forest: #3c6e58;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", "Liberation Mono", monospace;
+  --radius: 3px;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--paper);
+  font-size: 14px;
+}
+button { font-family: inherit; }
+code { font-family: var(--mono); }
+
+.app-shell {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100vh;
+}
+
+/* Menu bar ------------------------------------------------------ */
+.menubar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  height: 34px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  position: relative;
+  z-index: 30;
+  user-select: none;
+}
+.menu-item {
+  position: relative;
+  padding: 7px 10px;
+  font-size: 13px;
+  color: var(--ink-muted);
+  cursor: default;
+  border-radius: var(--radius);
+}
+.menu-item:hover, .menu-item.open { background: var(--blueprint-soft); color: var(--blueprint-dark); }
+.menubar-title {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--ink-faint);
+  letter-spacing: 0.02em;
+  padding-right: 6px;
+}
+.menu-dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 220px;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 4px;
+  box-shadow: 0 2px 8px rgba(30, 25, 15, 0.08);
+}
+.menu-item.open .menu-dropdown { display: block; }
+.menu-dropdown button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 7px 10px;
+  font-size: 13px;
+  color: var(--ink);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.menu-dropdown button:hover { background: var(--blueprint-soft); color: var(--blueprint-dark); }
+.menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+
+/* Body layout ---------------------------------------------------- */
+.body-grid {
+  display: grid;
+  grid-template-columns: 250px 1fr;
+  min-height: 0;
+}
+
+.workspace-panel {
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  overflow-y: auto;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-subtabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.sidebar-subtab {
+  flex: 1;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 9px 8px;
+  font-size: 12px;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.sidebar-subtab:hover { color: var(--blueprint-dark); }
+.sidebar-subtab.active { color: var(--blueprint-dark); border-bottom-color: var(--blueprint); font-weight: 600; }
+.sidebar-view { display: none; flex: 1; min-height: 0; overflow-y: auto; padding: 10px 0; }
+.sidebar-view.active { display: block; }
+.workspace-empty { padding: 10px 12px; color: var(--ink-faint); font-size: 13px; }
+.workspace-row {
+  display: grid;
+  grid-template-columns: 1fr 56px;
+  gap: 2px 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.workspace-row:hover { background: var(--blueprint-soft); border-left-color: var(--blueprint); }
+.workspace-row .var-name { font-family: var(--mono); font-size: 12.5px; color: var(--ink); }
+.workspace-row .var-meta { grid-column: 1 / -1; font-size: 11px; color: var(--ink-faint); }
+
+.history-list { display: flex; flex-direction: column; }
+.history-row {
+  padding: 6px 12px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.history-row:hover { background: var(--blueprint-soft); border-left-color: var(--blueprint); }
+.history-row .history-index { color: var(--ink-faint); margin-right: 6px; }
+
+/* Main area / tabs ------------------------------------------------ */
+.main-area {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 0;
+}
+.tab-bar {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  padding: 0 6px;
+}
+.tab-button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.tab-button:hover { color: var(--blueprint-dark); }
+.tab-button.active { color: var(--blueprint-dark); border-bottom-color: var(--blueprint); font-weight: 600; }
+
+.tab-panel { display: none; min-height: 0; height: 100%; flex-direction: column; }
+.tab-panel.active { display: flex; }
+
+/* Command window --------------------------------------------------- */
+.console-output {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.console-line { margin: 0 0 2px; }
+.console-line.echo { color: var(--ink-faint); }
+.console-line.echo::before { content: '>> '; color: var(--ink-faint); }
+.console-line.error { color: var(--rust); }
+.console-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding: 8px 16px;
+  background: var(--panel);
+}
+.console-prompt { font-family: var(--mono); color: var(--blueprint); font-weight: 600; }
+.console-input {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 13px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+}
+
+/* Script editor ------------------------------------------------------ */
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.editor-filename {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: 2px;
+  border: 1px solid transparent;
+}
+.editor-filename:hover { color: var(--blueprint-dark); border-color: var(--border); background: var(--blueprint-soft); }
+.editor-filename::after { content: ' \270E'; opacity: 0.6; font-size: 11px; }
+.editor-mount { flex: 1; overflow: auto; min-height: 0; }
+.editor-mount .cm-editor { height: 100%; font-family: var(--mono); font-size: 13.5px; }
+.editor-mount .cm-scroller { font-family: var(--mono); }
+
+/* Figures ------------------------------------------------------------ */
+.figure-tab-strip {
+  display: flex;
+  gap: 2px;
+  padding: 6px 10px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.figure-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 12px;
+  font-size: 12px;
+  color: var(--ink-muted);
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.figure-tab.active { color: var(--blueprint-dark); background: var(--panel); font-weight: 600; }
+.figure-tab-label { cursor: pointer; }
+.figure-tab-close {
+  border: none;
+  background: none;
+  color: var(--ink-faint);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.figure-tab-close:hover { background: var(--rust-soft); color: var(--rust); }
+.figure-mount { flex: 1; min-height: 0; padding: 10px; }
+.figure-empty { color: var(--ink-faint); font-size: 13px; padding: 20px; }
+.figure-plot { width: 100%; height: 100%; }
+
+/* Buttons -------------------------------------------------------------- */
+.btn {
+  font-size: 13px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--blueprint); color: var(--blueprint-dark); }
+.btn-primary { background: var(--blueprint); border-color: var(--blueprint); color: #fff; }
+.btn-primary:hover { background: var(--blueprint-dark); border-color: var(--blueprint-dark); color: #fff; }
+
+/* Modal ------------------------------------------------------------ */
+.modal-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(30, 25, 15, 0.35);
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal-overlay.open { display: flex; }
+.modal-box {
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  max-width: 720px;
+  max-height: 80vh;
+  overflow: auto;
+  padding: 20px 24px;
+}
+.modal-box h2 { margin-top: 0; font-size: 16px; color: var(--blueprint-dark); }
+.modal-box table { border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
+.modal-box td, .modal-box th { border: 1px solid var(--border); padding: 3px 8px; text-align: right; }
+.modal-close {
+  position: absolute;
+  top: 14px; right: 18px;
+  border: none; background: none;
+  font-size: 18px; color: var(--ink-faint);
+  cursor: pointer;
+}
+.modal-box { position: relative; }
+
+/* Scrollbars (subtle, matches the paper theme) ------------------------ */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 5px; }
+
+@media (max-width: 720px) {
+  .body-grid { grid-template-columns: 1fr; }
+  .workspace-panel { display: none; }
+}
