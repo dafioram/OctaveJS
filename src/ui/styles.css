@@ -133,16 +133,26 @@ code { font-family: var(--mono); }
 .sidebar-view.active { display: block; }
 .workspace-empty { padding: 10px 12px; color: var(--ink-faint); font-size: 13px; }
 .workspace-row {
-  display: grid;
-  grid-template-columns: 1fr 56px;
-  gap: 2px 8px;
   padding: 6px 12px;
   cursor: pointer;
   border-left: 2px solid transparent;
 }
 .workspace-row:hover { background: var(--blueprint-soft); border-left-color: var(--blueprint); }
+.workspace-row-main { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .workspace-row .var-name { font-family: var(--mono); font-size: 12.5px; color: var(--ink); }
-.workspace-row .var-meta { grid-column: 1 / -1; font-size: 11px; color: var(--ink-faint); }
+.workspace-row .var-meta { font-size: 11px; color: var(--ink-faint); margin-top: 2px; }
+.var-delete {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--ink-faint);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.var-delete:hover { background: var(--rust-soft); color: var(--rust); }
 
 .history-list { display: flex; flex-direction: column; }
 .history-row {

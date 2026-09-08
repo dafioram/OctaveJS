@@ -135,7 +135,7 @@ export const HELP_DATA = new Map(Object.entries({
   char: { syntax: 's = char(x)', desc: 'Convert numeric codes to a char array (string).' },
 
   // ---- printing / string formatting ----
-  disp: { syntax: 'disp(x)', desc: 'Display a value without an "x =" header.' },
+  disp: { syntax: 'disp(x)  |  disp hello', desc: 'Display a value without an "x =" header (command syntax works for bareword text: disp hello).' },
   fprintf: { syntax: 'fprintf(fmt, ...)', desc: 'Formatted print to the Command Window (supports \\n, \\t escapes and %d/%f/%s/etc.).' },
   sprintf: { syntax: 's = sprintf(fmt, ...)', desc: 'Formatted print into a string, instead of to the console.' },
   num2str: { syntax: 's = num2str(x)  |  s = num2str(x, precision)', desc: 'Convert a number (or matrix) to text.' },
@@ -153,7 +153,7 @@ export const HELP_DATA = new Map(Object.entries({
   // ---- workspace management ----
   who: { syntax: 'who', desc: 'List variable names in the current workspace.' },
   whos: { syntax: 'whos', desc: 'List variables with size and class.' },
-  clear: { syntax: "clear  |  clear('x', 'y')", desc: 'Remove all variables, or specific named ones. Note: bare-word "clear x y" command syntax is not supported — use quotes.' },
+  clear: { syntax: "clear  |  clear('x', 'y')  |  clear x y", desc: 'Remove all variables, or specific named ones (command syntax works too: clear x y).' },
   clc: { syntax: 'clc', desc: "Clear the Command Window's output." },
   exist: { syntax: "code = exist('name')", desc: '1 if a variable, 2 if a user function, 5 if a builtin, 0 if not found.' },
   feval: { syntax: "y = feval(fh, ...)  |  y = feval('name', ...)", desc: 'Call a function by handle or by name.' },
@@ -162,7 +162,7 @@ export const HELP_DATA = new Map(Object.entries({
 
   // ---- plotting ----
   figure: { syntax: 'figure  |  figure(n)', desc: 'Create or switch to a numbered figure.' },
-  hold: { syntax: "hold('on')  |  hold('off')  |  hold", desc: 'Keep (or stop keeping) existing plots when adding new ones. Note: bare "hold on" command syntax is not supported.' },
+  hold: { syntax: "hold('on')  |  hold('off')  |  hold  |  hold on  |  hold off", desc: 'Keep (or stop keeping) existing plots when adding new ones.' },
   plot: { syntax: "plot(x, y)  |  plot(x, y, 'r--')  |  plot(y)", desc: "Line/marker plot. Inline linespec strings only (e.g. 'r--', 'b-o') — no Name-Value options." },
   scatter: { syntax: 'scatter(x, y)', desc: 'Scatter (markers-only) plot.' },
   bar: { syntax: 'bar(y)  |  bar(x, y)', desc: 'Bar chart.' },
@@ -172,10 +172,10 @@ export const HELP_DATA = new Map(Object.entries({
   ylabel: { syntax: "ylabel('text')", desc: 'Label the y-axis of the current figure.' },
   title: { syntax: "title('text')", desc: 'Title the current figure.' },
   legend: { syntax: "legend('a', 'b', ...)", desc: 'Label existing traces, in the order they were added.' },
-  grid: { syntax: "grid('on')  |  grid('off')  |  grid", desc: 'Toggle the axes grid. Note: bare "grid on" command syntax is not supported.' },
+  grid: { syntax: "grid('on')  |  grid('off')  |  grid  |  grid on  |  grid off", desc: 'Toggle the axes grid.' },
   xlim: { syntax: 'xlim([xmin xmax])', desc: 'Set the x-axis range.' },
   ylim: { syntax: 'ylim([ymin ymax])', desc: 'Set the y-axis range.' },
-  axis: { syntax: "axis('equal')  |  axis('tight')  |  axis([xmin xmax ymin ymax])", desc: 'Adjust axis scaling/limits.' },
+  axis: { syntax: "axis('equal')  |  axis('tight')  |  axis([xmin xmax ymin ymax])  |  axis equal  |  axis tight", desc: 'Adjust axis scaling/limits.' },
 
   // ---- file I/O ----
   readmatrix: { syntax: "A = readmatrix('file.csv')", desc: 'Read a numeric matrix from CSV (basic parser: no quoted fields).' },

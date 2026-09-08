@@ -26,6 +26,20 @@ export class ParseError extends Error {
 
 const BLOCK_CLOSERS = new Set(['end', 'elseif', 'else', 'case', 'otherwise']);
 
+// A small, deliberately narrow whitelist for MATLAB's "command syntax"
+// (bare-word arguments, no parens: `hold on` instead of `hold('on')`).
+// Real MATLAB resolves the general case by checking, at parse time,
+// whether the leading word is currently a variable in the workspace —
+// which requires the parser to see runtime state, something this app's
+// architecture deliberately doesn't do (parsing stays a pure, one-time,
+// stateless step, independent of any interpreter). Rather than plumb
+// scope access into the parser for a fully general (and only
+// MATLAB-legal in narrow cases anyway) feature, we support it for
+// exactly the handful of commands where it's actually idiomatic and
+// where the ambiguity this shortcut sidesteps essentially never arises
+// in practice. See README.
+const COMMAND_SYNTAX_NAMES = new Set(['clear', 'hold', 'grid', 'axis', 'disp']);
+
 class Parser {
   constructor(tokens) {
     this.toks = tokens;
@@ -131,7 +145,31 @@ class Parser {
           throw new ParseError(`Unexpected keyword '${t.value}'`, t);
       }
     }
+    if (t.type === TT.IDENT && COMMAND_SYNTAX_NAMES.has(t.value)) {
+      const next = this.peek(1);
+      // Only engage command syntax when a bareword clearly follows with a
+      // space (e.g. `hold on`) — never when what follows looks like the
+      // start of a normal expression continuation (`(`, `=`, an operator,
+      // etc.), so ordinary calls and assignments are completely unaffected.
+      if (next && next.spaceBefore && (next.type === TT.IDENT || next.type === TT.NUMBER)) {
+        return this.parseCommandSyntax(t.value);
+      }
+    }
     return this.parseAssignmentOrExpr();
+  }
+
+  // Rewrites `name word1 word2 ...` into the same AST as
+  // `name('word1', 'word2', ...)`, so nothing downstream (interpreter,
+  // builtins) needs to know this shortcut exists.
+  parseCommandSyntax(name) {
+    this.advance(); // consume the command name
+    const args = [];
+    while (this.at(TT.IDENT) || this.at(TT.NUMBER)) {
+      const tok = this.advance();
+      args.push({ type: 'Str', value: String(tok.value) });
+    }
+    const call = { type: 'Index', target: { type: 'Ident', name }, args };
+    return { type: 'ExprStmt', expr: call, suppressed: false };
   }
 
   parseGlobalOrPersistent(kind) {

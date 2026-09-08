@@ -167,5 +167,49 @@ function checkClose(label, actual, expected, tol = 1e-6) {
   check('help on unknown name says not found', getOutput().includes('not found'), true);
 }
 
+// ---------------- command syntax (clear/hold/grid/axis/disp) ----------------
+{
+  const { interp, run } = makeInterp();
+  run('x = 5; y = 10;');
+  run('clear x');
+  check('clear x (command syntax) removes just x', interp.workspace.has('x'), false);
+  check('clear x (command syntax) leaves y', fmtVar(interp, 'y'), 10);
+
+  run('a = 1; b = 2; c = 3;');
+  run('clear a b');
+  check('clear a b (command syntax) removes a', interp.workspace.has('a'), false);
+  check('clear a b (command syntax) removes b', interp.workspace.has('b'), false);
+  check('clear a b (command syntax) leaves c', fmtVar(interp, 'c'), 3);
+}
+{
+  const { interp, run, getOutput } = makeInterp();
+  run("disp hello");
+  check('disp hello (command syntax)', getOutput().trim(), 'hello');
+}
+{
+  const { interp, run } = makeInterp();
+  let lastTraces = null, lastLayout = null;
+  interp.host.figures.render = () => {};
+  // plotting.js reads state via ctx.interp.figures directly for these
+  // tests, so just confirm hold/grid/axis command-syntax calls don't
+  // throw and produce the same effect as their parenthesized form.
+  run("plot(1:3, [1 2 3]); hold on; plot(1:3, [3 2 1]);");
+  const fig = interp.figures.get(interp.figureState.current);
+  check('hold on (command syntax) enabled hold', fig.hold, true);
+  run("grid on;");
+  check('grid on (command syntax) set showgrid', fig.layout.xaxis.showgrid, true);
+  run("axis equal;");
+  check('axis equal (command syntax) set scaleanchor', fig.layout.yaxis.scaleanchor, 'x');
+}
+{
+  // Regression: normal (non-command) usage of these exact identifiers is
+  // completely unaffected — assignment, parenthesized calls, and bare
+  // no-arg calls all still work as before.
+  const { interp, run } = makeInterp();
+  run("clear('onlyThis');"); // parenthesized form still works (no throw)
+  run("x = 1; clear;"); // bare clear (no args) still clears everything
+  check('bare clear (no command syntax) still clears all', interp.workspace.has('x'), false);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

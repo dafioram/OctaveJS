@@ -18,6 +18,9 @@ await esbuild.build({
 });
 
 copyFileSync('public/index.html', 'dist/index.html');
+copyFileSync('public/favicon.svg', 'dist/favicon.svg');
+copyFileSync('public/favicon.ico', 'dist/favicon.ico');
+copyFileSync('public/apple-touch-icon.png', 'dist/apple-touch-icon.png');
 copyFileSync('src/ui/styles.css', 'dist/styles.css');
 
 console.log('Build complete -> dist/');

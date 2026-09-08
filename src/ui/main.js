@@ -37,9 +37,22 @@ function trackFigureTouch(figNum) {
   if (!figuresTouchedThisRun.includes(figNum)) figuresTouchedThisRun.push(figNum);
 }
 
-// After a command or script finishes, bring whatever figure(s) it touched
-// into view: straight to it if there's one, or a ~1s-paced flip through
-// all of them in the order they were created if there are several.
+// After a command or script finishes, actually draw whatever figure(s) it
+// touched, once each, using their final state — rather than redrawing on
+// every individual plot/xlabel/ylabel/title/etc. call along the way. This
+// avoids redundant work and (more importantly) means a figure only ever
+// gets drawn with its complete, final layout, never a partial one from
+// mid-script.
+function drawTouchedFigures() {
+  for (const figNum of figuresTouchedThisRun) {
+    const fig = interp.figures && interp.figures.get(figNum);
+    if (fig) renderFigure(figNum, fig.traces, fig.layout);
+  }
+}
+
+// After drawing, bring whatever figure(s) this run touched into view:
+// straight to it if there's one, or a ~1s-paced flip through all of them
+// in the order they were created if there are several.
 function revealTouchedFigures() {
   const touched = figuresTouchedThisRun;
   figuresTouchedThisRun = [];
@@ -74,13 +87,12 @@ const host = {
     consoleOutputEl.innerHTML = '';
   },
   figures: {
-    render(figNum, traces, layout) {
-      trackFigureTouch(figNum);
-      renderFigure(figNum, traces, layout);
-    },
-    show(figNum) {
-      trackFigureTouch(figNum);
-    },
+    // Both entry points (an actual plot call, and a bare figure(n) switch)
+    // just record that this figure needs attention; the real draw happens
+    // once, after the whole command/script finishes — see
+    // drawTouchedFigures().
+    render(figNum) { trackFigureTouch(figNum); },
+    show(figNum) { trackFigureTouch(figNum); },
   },
   io: {
     downloadText(name, text) { downloadBlob(name, new Blob([text], { type: 'text/csv' })); },
@@ -150,6 +162,18 @@ function switchFigureTab(figNum) {
     div.style.display = (n === figNum) ? 'block' : 'none';
   }
   rebuildFigureTabStrip();
+  // A figure drawn while its div was display:none gets laid out against a
+  // zero-size container, which makes Plotly silently skip title/axis-label
+  // positioning (they never get drawn, and don't reappear on their own
+  // once the div becomes visible). Recompute now that it actually has
+  // real dimensions — deferred a frame so the browser has applied the
+  // display change and reflowed before Plotly measures the container.
+  const activeDiv = figurePlotDivs.get(figNum);
+  if (activeDiv) {
+    requestAnimationFrame(() => {
+      try { Plotly.Plots.resize(activeDiv); } catch (e) { /* figure may have been closed by the time this fires */ }
+    });
+  }
 }
 
 function closeFigure(figNum) {
@@ -194,10 +218,35 @@ function renderWorkspace() {
     const isFn = v instanceof FunctionHandle;
     const sizeStr = isFn ? 'handle' : v.sizeStr();
     const clsStr = isFn ? 'function_handle' : v.className();
-    row.innerHTML = `<span class="var-name">${escapeHtml(name)}</span><span class="var-meta">${sizeStr}</span><span class="var-meta">${clsStr}</span>`;
+
+    const main = document.createElement('div');
+    main.className = 'workspace-row-main';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'var-name';
+    nameEl.textContent = name;
+    const delBtn = document.createElement('button');
+    delBtn.className = 'var-delete';
+    delBtn.textContent = '\u00d7';
+    delBtn.title = `Delete ${name}`;
+    delBtn.setAttribute('aria-label', `Delete variable ${name}`);
+    delBtn.onclick = (ev) => { ev.stopPropagation(); deleteVariable(name); };
+    main.appendChild(nameEl);
+    main.appendChild(delBtn);
+
+    const meta = document.createElement('div');
+    meta.className = 'var-meta';
+    meta.textContent = `${sizeStr}  ${clsStr}`;
+
+    row.appendChild(main);
+    row.appendChild(meta);
     if (!isFn) row.onclick = () => showMatrixModal(name, v);
     workspaceListEl.appendChild(row);
   }
+}
+
+function deleteVariable(name) {
+  interp.workspace.vars.delete(name);
+  renderWorkspace();
 }
 
 function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -287,6 +336,7 @@ function executeSource(src) {
     appendConsoleLine((e && e.message) ? e.message : String(e), 'error');
   }
   renderWorkspace();
+  drawTouchedFigures();
   revealTouchedFigures();
 }
 
@@ -563,7 +613,7 @@ function showHelpModal() {
     <p><strong>Strings:</strong> strcmp/strcmpi, upper/lower, strtrim, strrep, str2double, str2num.</p>
     <p><strong>Console:</strong> <code>clc</code> clears the Command Window. <code>help('name')</code> shows syntax for any function. Click a script's filename in the editor toolbar to rename it before saving. The left sidebar has a History tab alongside Workspace — click any past command to run it again.</p>
     <p><strong>I/O:</strong> readmatrix/writematrix (CSV), save/load (a real, rudimentary MAT5 <code>.mat</code> writer/reader — not HDF5; see README), run (execute a script from the virtual file list).</p>
-    <p><strong>Not supported:</strong> structs, cell arrays, string arrays (double-quoted), N-D arrays, integer classes, command syntax (<code>disp hello</code> / <code>hold on</code> — use <code>disp('hello')</code> / <code>hold('on')</code> instead). Full list with rationale is in the README shipped alongside this app.</p>
+    <p><strong>Not supported:</strong> structs, cell arrays, string arrays (double-quoted), N-D arrays, integer classes. Command syntax (bareword args, no parens) works for <code>clear</code>, <code>hold</code>, <code>grid</code>, <code>axis</code>, <code>disp</code> only — anything else needs the parenthesized form. Full list with rationale is in the README shipped alongside this app.</p>
   `;
   openModal();
 }

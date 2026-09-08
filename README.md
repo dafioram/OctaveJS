@@ -102,7 +102,7 @@ there's a reasonable workaround, it's listed.
 | Not supported | Use instead |
 |---|---|
 | Double-quoted strings (`"hello"`, MATLAB string arrays) | Single-quoted char arrays: `'hello'` |
-| **Command syntax** — bare-word arguments with no parens: `disp hello`, `hold on`, `grid on`, `axis equal`, `clear x y` | The function-call form with quoted arguments: `disp('hello')`, `hold('on')`, `grid('on')`, `axis('equal')`, `clear('x','y')` |
+| **General command syntax** for arbitrary/user-defined functions, e.g. calling your own `function foo(s)` as `foo bar` | Use the normal parenthesized form: `foo('bar')`. A small, fixed whitelist — `clear`, `hold`, `grid`, `axis`, `disp` — *does* support command syntax (`clear x y`, `hold on`, `grid off`, `axis equal`, `disp hello`), since those are idiomatic and unambiguous enough to special-case safely; see the note below the table. |
 | Structs (`s.field = ...`) | Separate variables, or parallel arrays |
 | Cell arrays (`{1, 2, 3}`, `c{1}`) | Separate variables, or numeric/char arrays where the contents are uniform |
 | N-D arrays (more than 2 subscripts) | Reshape/index a 2-D matrix, or use multiple 2-D matrices |
@@ -114,6 +114,20 @@ there's a reasonable workaround, it's listed.
 | Matrix/columnwise FFT | `fft`/`ifft` only accept vector input |
 | Complex-matrix `rank`/`svd` | `rank(real(A))` as an approximation, or avoid complex inputs |
 | `strsplit` (would return a cell array) | Not implemented — see the cell-array row above |
+
+**On that command-syntax whitelist:** real MATLAB decides whether `foo bar`
+means "call foo with the string 'bar'" or something else by checking, at
+parse time, whether `foo` is *currently* a variable in the workspace —
+which makes MATLAB's grammar depend on runtime state, not just the text
+being parsed. This app keeps parsing a pure, one-time, stateless step
+(the parser never sees the interpreter's variables), so replicating that
+general rule isn't a good fit architecturally. Instead, `clear`, `hold`,
+`grid`, `axis`, and `disp` are recognized by name directly in the parser:
+when one of those five words is immediately followed by a bareword on the
+same line, it's rewritten to the equivalent parenthesized call before
+anything else happens — so `hold on` and `hold('on')` produce the exact
+same result. This covers the cases people actually reach for command
+syntax for, without the general ambiguity.
 
 ## math.js limitations (and what we did about them)
 
@@ -221,6 +235,9 @@ filesystem or browser.
 - Each open figure gets its own tab in the Figures panel; click the
   &times; on a tab to close that figure. Closing the last one resets
   figure numbering, so the next plot starts again at Figure 1.
+- Each variable in the Workspace panel has a small &times; to delete
+  just that one, alongside the existing `clear('name')` / `clear name`
+  ways to do it from the Command Window.
 - Running a command or script that creates or updates a figure switches
   you to it automatically. If a single run touches several figures (e.g.
   a script that calls `figure(1)`, plots, then `figure(2)`, plots again),
