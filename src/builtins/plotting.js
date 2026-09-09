@@ -158,9 +158,14 @@ export function registerPlotting(reg) {
     },
   });
 
-  reg.set('xlabel', { fn: (args, _n, ctx) => { const fig = currentFig(ctx.interp); fig.layout.xaxis.title = args[0].toJSString(); render(ctx, fig); return []; } });
-  reg.set('ylabel', { fn: (args, _n, ctx) => { const fig = currentFig(ctx.interp); fig.layout.yaxis.title = args[0].toJSString(); render(ctx, fig); return []; } });
-  reg.set('title', { fn: (args, _n, ctx) => { const fig = currentFig(ctx.interp); fig.layout.title = args[0].toJSString(); render(ctx, fig); return []; } });
+  // Plotly v4's schema expects title as an object ({text: '...'}), not a
+  // bare string — confirmed directly: passing a plain string gets silently
+  // dropped in favor of Plotly's own internal placeholder rather than
+  // erroring, which is why this looked like it did nothing at all (not
+  // even a console warning).
+  reg.set('xlabel', { fn: (args, _n, ctx) => { const fig = currentFig(ctx.interp); fig.layout.xaxis.title = { text: args[0].toJSString() }; render(ctx, fig); return []; } });
+  reg.set('ylabel', { fn: (args, _n, ctx) => { const fig = currentFig(ctx.interp); fig.layout.yaxis.title = { text: args[0].toJSString() }; render(ctx, fig); return []; } });
+  reg.set('title', { fn: (args, _n, ctx) => { const fig = currentFig(ctx.interp); fig.layout.title = { text: args[0].toJSString() }; render(ctx, fig); return []; } });
   reg.set('legend', {
     fn: (args, _n, ctx) => {
       const fig = currentFig(ctx.interp);

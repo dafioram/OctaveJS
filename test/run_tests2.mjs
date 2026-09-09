@@ -59,8 +59,8 @@ function checkThrowsMsg(label, fn, substr) {
   check('plot produced one trace', lastTraces.length, 1);
   check('plot linespec color parsed', lastTraces[0].line.color, '#d62728');
   check('plot linespec dash parsed', lastTraces[0].line.dash, 'dash');
-  check('xlabel set', lastLayout.xaxis.title, 'x');
-  check('title set', lastLayout.title, 'demo');
+  check('xlabel set', lastLayout.xaxis.title.text, 'x');
+  check('title set', lastLayout.title.text, 'demo');
 
   run("hold('on'); scatter(x, x);");
   check('hold on keeps previous trace, adds new one', lastTraces.length, 2);
