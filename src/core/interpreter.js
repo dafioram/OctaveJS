@@ -9,7 +9,7 @@
 // matches real MATLAB closure semantics.
 
 import { parse } from './parser.js';
-import { Mat, FunctionHandle, MatlabError } from './values.js';
+import { Mat, FunctionHandle, MatlabError, colonRange } from './values.js';
 import * as C from './cmath.js';
 
 class BreakSignal { }
@@ -64,6 +64,11 @@ export class Interpreter {
     this.builtins = new Map(); // registered by builtins/index.js via registerBuiltins()
     this.endStack = []; // stack of {size} for resolving `end` inside index args
     this.callDepth = 0;
+    // Local-function tables of the function files currently executing
+    // (top = innermost). A function file's subfunctions are only visible
+    // to code inside that file, matching MATLAB's scoping.
+    this.localFnStack = [];
+    this._mfileCache = new Map(); // name -> { text, ast, kind, primary, locals }
     this.figureState = { current: 1, hold: false };
     // Virtual file store: name -> { kind: 'csv'|'m'|'mat', text?, bytes? }.
     // Populated by the host UI (file picker / drag-drop) or by tests.
@@ -88,7 +93,7 @@ export class Interpreter {
     return this.runProgram(ast);
   }
 
-  runProgram(ast) {
+  runProgram(ast, scope = this.workspace) {
     // Hoist function definitions first (script-local functions), matching
     // MATLAB script behavior where a function can be called before its
     // textual definition later in the same file.
@@ -99,12 +104,43 @@ export class Interpreter {
     }
     for (const stmt of execStmts) {
       try {
-        this.execStmt(stmt, this.workspace);
+        this.execStmt(stmt, scope);
       } catch (e) {
-        if (e instanceof ReturnSignal) break;
+        if (e instanceof ReturnSignal) break; // `return` in a script ends the script
         throw e;
       }
     }
+  }
+
+  // Parses (with caching) a .m file from the virtual file store and
+  // classifies it: a *function file* starts with `function` (its first
+  // function is the one callable by the file's name, the rest are local
+  // subfunctions), anything else is a *script*.
+  loadMFile(name) {
+    const entry = this.files.get(name + '.m');
+    if (!entry) return null;
+    const cached = this._mfileCache.get(name);
+    if (cached && cached.text === entry.text) return cached;
+    const ast = parse(entry.text);
+    const first = ast.body[0];
+    let info;
+    if (first && first.type === 'FunctionDef') {
+      const locals = new Map();
+      for (const stmt of ast.body) {
+        if (stmt.type !== 'FunctionDef') throw new MatlabError(`Function file '${name}.m' may only contain function definitions`);
+        locals.set(stmt.name, stmt);
+      }
+      for (const def of locals.values()) def.locals = locals;
+      info = { text: entry.text, ast, kind: 'function', primary: first };
+    } else {
+      info = { text: entry.text, ast, kind: 'script' };
+    }
+    this._mfileCache.set(name, info);
+    return info;
+  }
+
+  _currentLocals() {
+    return this.localFnStack.length ? this.localFnStack[this.localFnStack.length - 1] : null;
   }
 
   // ---------------- statements ----------------
@@ -112,6 +148,12 @@ export class Interpreter {
   execStmt(node, scope) {
     switch (node.type) {
       case 'ExprStmt': {
+        // A bare variable name just displays the variable under its own
+        // name; it doesn't touch `ans` (MATLAB behavior).
+        if (node.expr.type === 'Ident' && scope.has(node.expr.name)) {
+          if (!node.suppressed) this.displayValue(node.expr.name, scope.get(node.expr.name));
+          return;
+        }
         const vals = this.evalForNargout(node.expr, scope, 0); // side-effect calls (e.g. plot) want nargout=0
         if (vals.length > 0 && !(node.expr.type === 'Index' && this._isVoidCallTarget(node.expr, scope))) {
           this.workspace.set('ans', vals[0]);
@@ -250,7 +292,21 @@ export class Interpreter {
       const baseName = this._rootIdentName(target.target);
       let mat = scope.has(baseName) ? scope.get(baseName) : Mat.empty();
       if (!(mat instanceof Mat)) throw new MatlabError(`Cannot index-assign into '${baseName}' (not a matrix)`);
+      if (!(value instanceof Mat)) throw new MatlabError(`Cannot store a ${className(value)} inside a numeric array`);
+      const fresh = mat.isEmpty && !mat.isChar && !mat.isLogical;
       mat = this.indexedAssign(mat.clone(), target.args, scope, value);
+      if (fresh) {
+        // Assigning into a new/empty variable takes on the value's class:
+        // `s = []; s(1) = 'a'` yields a char, not a double.
+        mat.isChar = value.isChar; mat.isLogical = value.isLogical;
+      } else if (mat.isLogical && !value.isLogical) {
+        // Storing numbers into a logical array converts them to logical.
+        for (let k = 0; k < mat.numel; k++) {
+          const nz = mat.re[k] !== 0 || (mat.isComplex && mat.im[k] !== 0);
+          mat.re[k] = nz ? 1 : 0;
+        }
+        mat.im = null;
+      }
       scope.set(baseName, mat);
       return;
     }
@@ -287,7 +343,6 @@ export class Interpreter {
     switch (node.type) {
       case 'Num': return [Mat.scalar(node.value)];
       case 'ImagNum': return [Mat.complexScalar(0, node.value)];
-      case 'Bool': return [Mat.logicalScalar(node.value)];
       case 'Str': return [Mat.fromString(node.value)];
       case 'End': {
         if (this.endStack.length === 0) throw new MatlabError("'end' used outside of an indexing expression");
@@ -307,7 +362,7 @@ export class Interpreter {
       case 'Binary': return [this.evalBinary(node, scope)];
       case 'Transpose': return [this.evalTranspose(node, scope)];
       case 'AnonFunc': return [this.evalAnonFunc(node, scope)];
-      case 'FuncHandle': return [new FunctionHandle({ name: node.name })];
+      case 'FuncHandle': return [new FunctionHandle({ name: node.name, locals: this._currentLocals() })];
       case 'Field':
         throw new MatlabError(`Struct field access ('.${node.name}') is not supported — structs aren't implemented. Consider separate variables or a Map-like workaround.`);
       case 'CellIndex':
@@ -322,13 +377,7 @@ export class Interpreter {
     const start = this.evalExpr(node.start, scope).toScalarNumber();
     const stop = this.evalExpr(node.stop, scope).toScalarNumber();
     const step = node.step ? this.evalExpr(node.step, scope).toScalarNumber() : 1;
-    const vals = [];
-    if (step === 0) return Mat.zeros(1, 0);
-    if (step > 0) { for (let v = start; v <= stop + 1e-10; v += step) vals.push(v); }
-    else { for (let v = start; v >= stop - 1e-10; v += step) vals.push(v); }
-    const re = new Float64Array(vals.length);
-    re.set(vals);
-    return new Mat(vals.length ? 1 : 1, vals.length, re);
+    return colonRange(start, step, stop);
   }
 
   evalMatrixLit(node, scope) {
@@ -362,7 +411,8 @@ export class Interpreter {
       colOff += m.cols;
     }
     const allChar = mats.every(m => m.isChar);
-    return new Mat(rows, cols, re, im, { isChar: allChar });
+    const allLogical = mats.every(m => m.isLogical);
+    return new Mat(rows, cols, re, im, { isChar: allChar, isLogical: allLogical });
   }
 
   vconcat(mats) {
@@ -386,19 +436,29 @@ export class Interpreter {
       rowOff += m.rows;
     }
     const allChar = mats.every(m => m.isChar);
-    return new Mat(rows, cols, re, im, { isChar: allChar });
+    const allLogical = mats.every(m => m.isLogical);
+    return new Mat(rows, cols, re, im, { isChar: allChar, isLogical: allLogical });
   }
 
   evalUnary(node, scope) {
     const v = this.evalExpr(node.expr, scope);
+    requireMatOperand(v, node.op);
     if (node.op === '+') return v;
     if (node.op === '-') return Mat.mapElementwise(v, (r, i) => [-r, -i]);
-    if (node.op === '~') return Mat.mapElementwise(v, (r, i) => [(r === 0 && i === 0) ? 1 : 0, 0]);
+    if (node.op === '~') {
+      const out = Mat.mapElementwise(v, (r, i) => {
+        if (Number.isNaN(r) || Number.isNaN(i)) throw new MatlabError('NaN values cannot be converted to logicals');
+        return [(r === 0 && i === 0) ? 1 : 0, 0];
+      });
+      out.isLogical = true;
+      return out;
+    }
     throw new MatlabError(`Unknown unary operator ${node.op}`);
   }
 
   evalTranspose(node, scope) {
     const v = this.evalExpr(node.expr, scope);
+    requireMatOperand(v, "'");
     const re = new Float64Array(v.numel);
     const im = v.isComplex ? new Float64Array(v.numel) : null;
     for (let r = 0; r < v.rows; r++) {
@@ -412,18 +472,18 @@ export class Interpreter {
   }
 
   evalAnonFunc(node, scope) {
-    // Capture free variables by value at creation time.
+    // Capture free *variables* by value at creation time. Function names
+    // are not captured as values (that would turn `pi` into a handle
+    // rather than 3.14159); they resolve normally at call time, with the
+    // creating file's local functions remembered in `locals`.
     const closure = new Map();
     const paramSet = new Set(node.params);
     const free = new Set();
     collectFreeIdents(node.body, paramSet, free);
     for (const name of free) {
       if (scope.has(name)) closure.set(name, scope.get(name));
-      else if (this.funcTable.has(name) || this.builtins.has(name)) {
-        closure.set(name, new FunctionHandle({ name }));
-      }
     }
-    return new FunctionHandle({ params: node.params, body: node.body, closure });
+    return new FunctionHandle({ params: node.params, body: node.body, closure, source: node.source ?? null, locals: this._currentLocals() });
   }
 
   evalBinary(node, scope) {
@@ -442,6 +502,8 @@ export class Interpreter {
     }
     const a = this.evalExpr(node.left, scope);
     const b = this.evalExpr(node.right, scope);
+    requireMatOperand(a, op);
+    requireMatOperand(b, op);
     return applyBinaryOp(op, a, b);
   }
 
@@ -472,6 +534,10 @@ export class Interpreter {
   }
 
   callNamed(name, argValues, nargout, callerScope) {
+    const locals = this._currentLocals();
+    if (locals && locals.has(name)) {
+      return this.callUserFunction(locals.get(name), argValues, nargout);
+    }
     if (this.funcTable.has(name)) {
       return this.callUserFunction(this.funcTable.get(name), argValues, nargout);
     }
@@ -480,17 +546,15 @@ export class Interpreter {
       const result = spec.fn(argValues, nargout, this._builtinCtx(callerScope));
       return result === undefined ? [] : result;
     }
-    if (this.files.has(name + '.m')) {
+    const mfile = this.loadMFile(name);
+    if (mfile && mfile.kind === 'function') {
+      return this.callUserFunction(mfile.primary, argValues, nargout);
+    }
+    if (mfile) {
       // Bare script-name call (e.g. `>> projectile`), matching MATLAB's
       // behavior of running a same-named .m script found on the path.
-      const entry = this.files.get(name + '.m');
-      const ast = parse(entry.text);
-      for (const stmt of ast.body) if (stmt.type === 'FunctionDef') this.funcTable.set(stmt.name, stmt);
-      const scope = callerScope || this.workspace;
-      for (const stmt of ast.body) {
-        if (stmt.type === 'FunctionDef') continue;
-        try { this.execStmt(stmt, scope); } catch (e) { if (e instanceof ReturnSignal) break; throw e; }
-      }
+      if (argValues.length > 0) throw new MatlabError(`'${name}' is a script and cannot take input arguments`);
+      this.runProgram(mfile.ast, callerScope || this.workspace);
       return [];
     }
     throw new MatlabError(`Undefined function '${name}'`);
@@ -498,15 +562,23 @@ export class Interpreter {
 
   callHandle(fh, argValues, nargout, callerScope) {
     if (fh.builtin) return fh.builtin(argValues, nargout, this._builtinCtx(callerScope));
-    if (fh.name) return this.callNamed(fh.name, argValues, nargout, callerScope);
-    // anonymous function
-    const scope = new Scope(this, { isFunction: true, funcName: '<anonymous>' });
-    for (const [k, v] of fh.closure.entries()) scope.set(k, v);
-    if (argValues.length > fh.params.length) throw new MatlabError('Too many input arguments');
-    fh.params.forEach((p, i) => { if (i < argValues.length) scope.set(p, argValues[i]); });
-    scope.set('nargin', Mat.scalar(argValues.length));
-    const result = this.evalExpr(fh.body, scope);
-    return [result];
+    // Resolve names in the context of the file the handle was created in,
+    // so a handle to a local subfunction keeps working outside that file.
+    this.localFnStack.push(fh.locals || null);
+    try {
+      if (fh.name) return this.callNamed(fh.name, argValues, nargout, callerScope);
+      // anonymous function
+      const scope = new Scope(this, { isFunction: true, funcName: '<anonymous>' });
+      for (const [k, v] of fh.closure.entries()) scope.set(k, v);
+      if (argValues.length > fh.params.length) throw new MatlabError('Too many input arguments');
+      fh.params.forEach((p, i) => { if (i < argValues.length) scope.set(p, argValues[i]); });
+      scope.set('nargin', Mat.scalar(argValues.length));
+      // Forward nargout so `[a,b] = f()` works when the body is itself a
+      // multi-output call, e.g. f = @() deal(1,2).
+      return this.evalForNargout(fh.body, scope, nargout);
+    } finally {
+      this.localFnStack.pop();
+    }
   }
 
   callFunctionValue(fh, argValues, nargout, callerScope) {
@@ -517,7 +589,8 @@ export class Interpreter {
 
   callUserFunction(def, argValues, nargout) {
     this.callDepth++;
-    if (this.callDepth > 200) { this.callDepth--; throw new MatlabError('Maximum recursion depth exceeded'); }
+    if (this.callDepth > MAX_RECURSION) { this.callDepth--; throw new MatlabError(`Maximum recursion limit of ${MAX_RECURSION} reached`); }
+    this.localFnStack.push(def.locals || null);
     try {
       if (argValues.length > def.params.length) throw new MatlabError(`Too many input arguments to '${def.name}'`);
       const scope = new Scope(this, { isFunction: true, funcName: def.name });
@@ -534,8 +607,18 @@ export class Interpreter {
         if (scope.vars.has(outName)) outputs.push(scope.vars.get(outName));
         else break; // later outputs simply not requested/assigned
       }
+      if (outputs.length < Math.min(Math.max(nargout, 1), def.outputs.length) && nargout >= 1) {
+        throw new MatlabError(`Output argument '${def.outputs[outputs.length]}' was not assigned during the call to '${def.name}'`);
+      }
       return outputs;
+    } catch (e) {
+      // The JavaScript stack can run out before MAX_RECURSION is reached
+      // (each MATLAB call uses many JS frames); report that as a MATLAB
+      // error rather than an internal RangeError.
+      if (e instanceof RangeError) throw new MatlabError(`Maximum recursion depth exceeded in '${def.name}' (out of JavaScript stack space)`);
+      throw e;
     } finally {
+      this.localFnStack.pop();
       this.callDepth--;
     }
   }
@@ -789,7 +872,21 @@ export class Interpreter {
   // ---------------- display ----------------
 
   displayValue(name, val) {
-    this.print(this.host.formatAssignment ? this.host.formatAssignment(name, val) : `${name} =\n${formatMat(val)}\n`);
+    if (this.host.formatAssignment) { this.print(this.host.formatAssignment(name, val)); return; }
+    this.print(`${name} =\n${formatValue(val)}\n`);
+  }
+}
+
+// MATLAB's own default limit (get(0,'RecursionLimit')) is 500. In practice
+// the browser's JS stack may run out first (a few hundred levels); that
+// case is caught and reported in callUserFunction.
+const MAX_RECURSION = 500;
+
+function className(v) { return v instanceof FunctionHandle ? 'function_handle' : (v && v.className ? v.className() : 'value'); }
+
+function requireMatOperand(v, op) {
+  if (!(v instanceof Mat)) {
+    throw new MatlabError(`Operator '${op}' is not supported for operands of type '${className(v)}'`);
   }
 }
 
@@ -918,16 +1015,51 @@ function collectFreeIdents(node, bound, out) {
 }
 
 // ---------------- console formatting (basic; UI may override via host) ----------------
+//
+// Approximates MATLAB's default `format short`: integer-valued arrays print
+// as integers; other values get 4 decimal places, switching to e-notation
+// (scalars) or a common "1.0e+03 *" scale factor (arrays) when the
+// magnitudes fall outside [0.001, 1000).
+
+export function formatValue(val) {
+  if (val instanceof FunctionHandle) return `  function_handle with value:\n\n    ${val.displayName()}`;
+  return formatMat(val);
+}
 
 export function formatMat(mat) {
   if (mat.isChar) return mat.toJSString();
   if (mat.isEmpty) return `     [](${mat.rows}x${mat.cols})`;
+  const n = mat.numel;
+  let allInt = true, maxAbs = 0;
+  const scan = (x) => {
+    if (!Number.isFinite(x)) return;
+    if (!Number.isInteger(x)) allInt = false;
+    if (Math.abs(x) > maxAbs) maxAbs = Math.abs(x);
+  };
+  for (let k = 0; k < n; k++) { scan(mat.re[k]); if (mat.isComplex) scan(mat.im[k]); }
+
+  let header = '';
+  let fmt;
+  if (allInt && maxAbs < 1e9) {
+    fmt = (x) => fmtSpecial(x) ?? String(x === 0 ? 0 : x);
+  } else if (n === 1) {
+    const useFixed = !allInt && maxAbs >= 1e-3 && maxAbs < 1e3;
+    fmt = (x) => fmtSpecial(x) ?? (x === 0 ? '0' : useFixed ? x.toFixed(4) : fmtExp(x));
+  } else if (maxAbs === 0 || (maxAbs >= 1e-3 && maxAbs < 1e3)) {
+    fmt = (x) => fmtSpecial(x) ?? (x === 0 ? '0' : x.toFixed(4));
+  } else {
+    const p = Math.floor(Math.log10(maxAbs));
+    const scale = Math.pow(10, p);
+    header = `   1.0e${p < 0 ? '-' : '+'}${String(Math.abs(p)).padStart(2, '0')} *\n\n`;
+    fmt = (x) => fmtSpecial(x) ?? (x === 0 ? '0' : (x / scale).toFixed(4));
+  }
+
   const fmtNum = (r, i) => {
-    if (i && i !== 0) {
-      const sign = i < 0 ? '-' : '+';
-      return `${fmtReal(r)} ${sign} ${fmtReal(Math.abs(i))}i`;
+    if (mat.isComplex) {
+      const sign = (i < 0 || Object.is(i, -0)) ? '-' : '+';
+      return `${fmt(r)} ${sign} ${fmt(Math.abs(i))}i`;
     }
-    return fmtReal(r);
+    return fmt(r);
   };
   const cells = [];
   for (let r = 0; r < mat.rows; r++) {
@@ -939,10 +1071,15 @@ export function formatMat(mat) {
     cells.push(row);
   }
   const width = Math.max(...cells.flat().map(s => s.length), 1);
-  return cells.map(row => '   ' + row.map(s => s.padStart(width)).join('   ')).join('\n');
+  return header + cells.map(row => '   ' + row.map(s => s.padStart(width)).join('   ')).join('\n');
 }
-function fmtReal(x) {
-  if (Number.isInteger(x)) return String(x);
-  if (!isFinite(x)) return String(x);
-  return Number(x.toPrecision(5)).toString();
+function fmtSpecial(x) {
+  if (Number.isNaN(x)) return 'NaN';
+  if (x === Infinity) return 'Inf';
+  if (x === -Infinity) return '-Inf';
+  return null;
+}
+// e-notation with MATLAB's two-digit exponent: 1.0000e-03, not 1.0000e-3.
+function fmtExp(x) {
+  return x.toExponential(4).replace(/e([+-])(\d)$/, 'e$10$2');
 }

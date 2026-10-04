@@ -155,19 +155,44 @@ export function registerArrayOps(reg) {
     },
   });
 
+  // [C, ia, ic] = unique(A) | unique(A, 'stable'). C is a row for row-vector
+  // input and a column otherwise; ia (first occurrences) and ic satisfy
+  // C = A(ia) and A = C(ic). Each NaN counts as distinct, as in MATLAB.
   reg.set('unique', {
-    fn: (args) => {
+    fn: (args, nargout) => {
       const a = args[0];
-      const seen = new Map();
-      for (let k = 0; k < a.numel; k++) {
-        const key = a.re[k] + (a.isComplex ? ('_' + a.im[k]) : '');
-        if (!seen.has(key)) seen.set(key, { re: a.re[k], im: a.isComplex ? a.im[k] : 0 });
+      let stable = false;
+      for (const opt of args.slice(1)) {
+        const o = opt.isChar ? opt.toJSString().toLowerCase() : '';
+        if (o === 'stable') stable = true;
+        else if (o !== 'sorted') throw new MatlabError(`unique: unsupported option '${o}'`);
       }
-      const vals = [...seen.values()].sort((x, y) => x.re - y.re);
-      const re = new Float64Array(vals.length);
+      const groups = new Map(); // key -> index into `uniq`
+      const uniq = [];          // { re, im, first }
+      const ic = new Float64Array(a.numel);
+      for (let k = 0; k < a.numel; k++) {
+        const re = a.re[k], im = a.isComplex ? a.im[k] : 0;
+        const key = Number.isNaN(re) || Number.isNaN(im) ? `nan${k}` : `${re}_${im}`;
+        let g = groups.get(key);
+        if (g === undefined) { g = uniq.length; groups.set(key, g); uniq.push({ re, im, first: k, slot: g }); }
+        ic[k] = g;
+      }
+      const order = stable ? uniq.slice() : uniq.slice().sort((x, y) => compareForSort(x, y, false) || (x.im - y.im) || (x.first - y.first));
+      const rank = new Map(order.map((u, pos) => [u.slot, pos]));
+      const n = order.length;
+      const re = new Float64Array(n), ia = new Float64Array(n);
       let im = null;
-      vals.forEach((v, i) => { re[i] = v.re; if (v.im !== 0) { if (!im) im = new Float64Array(vals.length); im[i] = v.im; } });
-      return [new Mat(vals.length, 1, re, im)];
+      order.forEach((u, pos) => {
+        re[pos] = u.re; ia[pos] = u.first + 1;
+        if (u.im !== 0) { if (!im) im = new Float64Array(n); im[pos] = u.im; }
+      });
+      for (let k = 0; k < ic.length; k++) ic[k] = rank.get(ic[k]) + 1;
+      const asRow = a.rows === 1 && a.numel > 0;
+      const C = new Mat(asRow ? 1 : n, asRow ? n : 1, re, im, { isChar: a.isChar, isLogical: a.isLogical });
+      const out = [C];
+      if (nargout >= 2) out.push(new Mat(n, 1, ia));
+      if (nargout >= 3) out.push(new Mat(ic.length, 1, ic));
+      return out;
     },
   });
 

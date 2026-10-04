@@ -2,8 +2,8 @@
 // printing (disp/fprintf/sprintf/num2str), and workspace management
 // (who/whos/clear/exist), plus feval/arrayfun/deal.
 
-import { Mat, FunctionHandle, MatlabError } from '../core/values.js';
-import { formatMat } from '../core/interpreter.js';
+import { Mat, FunctionHandle, MatlabError, colonRange } from '../core/values.js';
+import { formatValue } from '../core/interpreter.js';
 import { parse } from '../core/parser.js';
 import { HELP_DATA } from './help-data.js';
 
@@ -138,6 +138,15 @@ export function registerSystem(reg) {
     },
   });
 
+  // true/false are ordinary functions in MATLAB, so true(2,3) works too.
+  const logicalFill = (v) => (args) => {
+    const [r, c] = shapeFromArgs(args);
+    const m = Mat.zeros(r, c); m.re.fill(v); m.isLogical = true;
+    return [m];
+  };
+  reg.set('true', { fn: logicalFill(1) });
+  reg.set('false', { fn: logicalFill(0) });
+
   reg.set('zeros', { fn: (args) => { const [r, c] = shapeFromArgs(args); return [Mat.zeros(r, c)]; } });
   reg.set('ones', { fn: (args) => { const [r, c] = shapeFromArgs(args); const m = Mat.zeros(r, c); m.re.fill(1); return [m]; } });
   reg.set('eye', { fn: (args) => { const [r, c] = shapeFromArgs(args); const m = Mat.zeros(r, c); for (let k = 0; k < Math.min(r, c); k++) m.set2(k, k, 1); return [m]; } });
@@ -178,10 +187,7 @@ export function registerSystem(reg) {
       const start = args[0].toScalarNumber();
       const step = args.length >= 3 ? args[1].toScalarNumber() : 1;
       const stop = args.length >= 3 ? args[2].toScalarNumber() : args[1].toScalarNumber();
-      const vals = [];
-      if (step > 0) for (let v = start; v <= stop + 1e-10; v += step) vals.push(v);
-      else if (step < 0) for (let v = start; v >= stop - 1e-10; v += step) vals.push(v);
-      return [new Mat(1, vals.length, Float64Array.from(vals))];
+      return [colonRange(start, step, stop)];
     },
   });
 
@@ -223,7 +229,7 @@ export function registerSystem(reg) {
   reg.set('disp', {
     fn: (args, _n, ctx) => {
       const a = args[0];
-      ctx.interp.print((a.isChar ? a.toJSString() : formatMat(a)) + '\n');
+      ctx.interp.print((a instanceof Mat && a.isChar ? a.toJSString() : formatValue(a)) + '\n');
       return [];
     },
   });
@@ -309,6 +315,7 @@ export function registerSystem(reg) {
       const name = args[0].toJSString();
       if (ctx.scope.has(name)) return [Mat.scalar(1)];
       if (ctx.interp.funcTable.has(name)) return [Mat.scalar(2)];
+      if (ctx.interp.files.has(name + '.m') || ctx.interp.files.has(name)) return [Mat.scalar(2)];
       if (ctx.interp.builtins.has(name)) return [Mat.scalar(5)];
       return [Mat.scalar(0)];
     },
@@ -338,6 +345,13 @@ export function registerSystem(reg) {
         if (r.isComplex && r.im[0] !== 0) { if (!im) im = new Float64Array(n); im[k] = r.im[0]; }
       }
       return [new Mat(arrays[0].rows, arrays[0].cols, re, im)];
+    },
+  });
+  reg.set('func2str', {
+    fn: (args) => {
+      if (!(args[0] instanceof FunctionHandle)) throw new MatlabError('func2str: input must be a function handle');
+      const fh = args[0];
+      return [Mat.fromString(fh.name ? fh.name : fh.displayName())];
     },
   });
   reg.set('deal', {

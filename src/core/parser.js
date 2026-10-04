@@ -41,8 +41,9 @@ const BLOCK_CLOSERS = new Set(['end', 'elseif', 'else', 'case', 'otherwise']);
 const COMMAND_SYNTAX_NAMES = new Set(['clear', 'hold', 'grid', 'axis', 'disp']);
 
 class Parser {
-  constructor(tokens) {
+  constructor(tokens, source = '') {
     this.toks = tokens;
+    this.source = source;
     this.pos = 0;
     this.bracketStack = []; // 'paren' | 'bracket' | 'brace'
   }
@@ -499,8 +500,6 @@ class Parser {
     if (t.type === TT.IMAG_NUMBER) { this.advance(); return { type: 'ImagNum', value: t.value }; }
     if (t.type === TT.STRING) { this.advance(); return { type: 'Str', value: t.value }; }
     if (t.type === TT.KEYWORD && t.value === 'end') { this.advance(); return { type: 'End' }; }
-    if (t.type === TT.KEYWORD && t.value === 'true') { this.advance(); return { type: 'Bool', value: true }; }
-    if (t.type === TT.KEYWORD && t.value === 'false') { this.advance(); return { type: 'Bool', value: false }; }
     if (t.type === TT.IDENT) { this.advance(); return { type: 'Ident', name: t.value }; }
 
     if (t.type === TT.LPAREN) {
@@ -530,8 +529,11 @@ class Parser {
           if (this.at(TT.COMMA)) this.advance(); else break;
         }
         this.expect(TT.RPAREN);
+        const bodyStart = this.cur();
         const body = this.parseExpr();
-        return { type: 'AnonFunc', params, body };
+        const bodyEnd = this.toks[this.pos - 1];
+        const source = this.source.slice(bodyStart.start, bodyEnd.end).trim();
+        return { type: 'AnonFunc', params, body, source };
       }
       const name = this.expect(TT.IDENT).value;
       return { type: 'FuncHandle', name };
@@ -635,7 +637,7 @@ class Parser {
 
 export function parse(source) {
   const tokens = tokenize(source);
-  const p = new Parser(tokens);
+  const p = new Parser(tokens, source);
   return p.parseProgram();
 }
 

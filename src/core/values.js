@@ -118,9 +118,13 @@ export class Mat {
   }
 
   // True/false test used by if/while/&&/||: nonempty and all elements nonzero.
+  // NaN can't be converted to a logical, so (like MATLAB) it's an error here.
   isTruthy() {
     if (this.isEmpty) return false;
     for (let k = 0; k < this.re.length; k++) {
+      if (Number.isNaN(this.re[k]) || (this.isComplex && Number.isNaN(this.im[k]))) {
+        throw new MatlabError('NaN values cannot be converted to logicals');
+      }
       const zero = this.re[k] === 0 && (!this.isComplex || this.im[k] === 0);
       if (zero) return false;
     }
@@ -179,17 +183,39 @@ export class Mat {
   }
 }
 
+// The values of the colon operator a:step:b. Computed as a + k*step
+// (never by repeated addition, which accumulates rounding error), with
+// the count and final element snapped using a small relative tolerance —
+// so 0:0.1:1 has exactly 11 elements and ends at exactly 1, as in MATLAB.
+export function colonRange(start, step, stop) {
+  if (Number.isNaN(start) || Number.isNaN(step) || Number.isNaN(stop)) return new Mat(1, 1, new Float64Array([NaN]));
+  if (step === 0 || (step > 0 && start > stop) || (step < 0 && start < stop)) return Mat.zeros(1, 0);
+  const q = (stop - start) / step;
+  if (!Number.isFinite(q)) throw new MatlabError('Range has too many elements');
+  const tol = 2 * Number.EPSILON * Math.max(Math.abs(start), Math.abs(stop)) / Math.abs(step);
+  const n = Math.floor(q + Math.max(tol, 4 * Number.EPSILON * Math.abs(q)));
+  if (n + 1 > 2 ** 31) throw new MatlabError('Range has too many elements');
+  let last = start + n * step;
+  if (Math.abs(last - stop) <= tol * Math.abs(step) + 4 * Number.EPSILON * Math.abs(stop)) last = stop;
+  const re = new Float64Array(n + 1);
+  const half = Math.floor(n / 2);
+  for (let k = 0; k <= n; k++) re[k] = k <= half ? start + k * step : last - (n - k) * step;
+  return new Mat(1, n + 1, re);
+}
+
 export class FunctionHandle {
-  constructor({ name = null, params = null, body = null, closure = null, builtin = null }) {
+  constructor({ name = null, params = null, body = null, closure = null, builtin = null, source = null, locals = null }) {
     this.name = name;         // for @sin / @myfunc
     this.params = params;     // for anonymous functions: array of param names
     this.body = body;         // AST expr, for anonymous functions
     this.closure = closure;   // captured Map<string, value>, for anonymous functions
     this.builtin = builtin;   // JS function, if this wraps a builtin directly
+    this.source = source;     // original source text of the body, for anonymous functions
+    this.locals = locals;     // local-function table of the file the handle was created in (or null)
   }
   displayName() {
     if (this.name) return `@${this.name}`;
-    if (this.params) return `@(${this.params.join(',')}) ...`;
+    if (this.params) return `@(${this.params.join(',')})${this.source !== null ? this.source : ' ...'}`;
     return '@(function handle)';
   }
 }

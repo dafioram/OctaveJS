@@ -35,7 +35,7 @@ export const TT = Object.freeze({
 const KEYWORDS = new Set([
   'if', 'elseif', 'else', 'end', 'for', 'while', 'switch', 'case',
   'otherwise', 'break', 'continue', 'return', 'function', 'global',
-  'persistent', 'true', 'false',
+  'persistent',
 ]);
 
 // Tokens after which a `'` means transpose rather than "start a string".
@@ -71,8 +71,9 @@ export function tokenize(source) {
     return c;
   }
   let sawSpace = false;
+  let tokStart = 0; // source offset where the token being lexed began
   function push(type, value) {
-    tokens.push({ type, value, line, col, spaceBefore: sawSpace });
+    tokens.push({ type, value, line, col, spaceBefore: sawSpace, start: tokStart, end: i });
     sawSpace = false;
   }
   function lastReal() {
@@ -85,6 +86,7 @@ export function tokenize(source) {
   while (i < n) {
     const c = peekCh();
     const startLine = line, startCol = col;
+    tokStart = i;
 
     // Line continuation "..."
     if (c === '.' && peekCh(1) === '.' && peekCh(2) === '.') {
@@ -248,6 +250,7 @@ export function tokenize(source) {
     }
   }
 
+  tokStart = i;
   push(TT.EOF, null);
   return tokens;
 }
