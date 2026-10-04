@@ -404,57 +404,36 @@ export function registerLinalg(reg) {
   // math.js's lusolve only accepts a single-column right-hand side (verified
   // directly: passing a multi-column matrix throws "Matrix columns must
   // match vector length"), so for A\B with a matrix B we solve column by
-  // column and reassemble.
-  function solveSingleColumn(aRowMajor, colValues, square) {
-    if (square) {
-      const x = math.lusolve(aRowMajor, colValues);
-      return (x.valueOf ? x.valueOf() : x).map(row => row[0]);
-    }
-    throw new MatlabError('internal: solveSingleColumn requires a square system');
-  }
+  // column and reassemble. Entries may be math.js Complex values, so the
+  // result keeps imaginary parts rather than dropping them.
   function solve(a, b) {
-    if (a.rows !== b.rows) throw new MatlabError(`Matrix dimensions must agree for A\\\\b (${a.sizeStr()} vs ${b.sizeStr()})`);
-    const aRM = toRowMajor(a);
-    const nRows = a.cols; // solution row count
-    const outCols = [];
-    if (a.rows === a.cols) {
-      for (let c = 0; c < b.cols; c++) {
-        const colVals = [];
-        for (let r = 0; r < b.rows; r++) colVals.push(b.get2(r, c));
-        try {
-          outCols.push(solveSingleColumn(aRM, colVals, true));
-        } catch (e) {
-          throw new MatlabError(`A\\\\b failed to solve (matrix may be singular): ${e.message}`);
-        }
+    if (a.rows !== b.rows) throw new MatlabError(`Matrix dimensions must agree for A\\b (${a.sizeStr()} vs ${b.sizeStr()})`);
+    let A = toRowMajor(a), B = toRowMajor(b);
+    if (a.rows !== a.cols) {
+      // Overdetermined/underdetermined: least-squares via the normal
+      // equations A'A x = A'b, with A' the conjugate transpose. (Less
+      // numerically stable than MATLAB's QR-based mldivide — see README.)
+      const Ah = math.ctranspose(A);
+      A = math.multiply(Ah, A);
+      B = math.multiply(Ah, B);
+    }
+    const n = a.cols, m = b.cols;
+    const re = new Float64Array(n * m);
+    let im = null;
+    for (let c = 0; c < m; c++) {
+      let x;
+      try {
+        x = math.lusolve(A, B.map(row => row[c]));
+      } catch (e) {
+        throw new MatlabError(`A\\b failed to solve (matrix may be singular): ${e.message}`);
       }
-      const re = new Float64Array(nRows * b.cols);
-      outCols.forEach((col, c) => col.forEach((v, r) => { re[c * nRows + r] = v; }));
-      return new Mat(nRows, b.cols, re);
+      (x.valueOf ? x.valueOf() : x).forEach((row, r) => {
+        const [vr, vi] = asComplexPair(Array.isArray(row) ? row[0] : row);
+        re[c * n + r] = vr;
+        if (vi !== 0) { if (!im) im = new Float64Array(n * m); im[c * n + r] = vi; }
+      });
     }
-    // Overdetermined/underdetermined: least-squares via normal equations.
-    // (Less numerically stable than MATLAB's QR-based mldivide — see README.)
-    const at = transposeGeneric(a, true);
-    const ata = matMul(at, a);
-    const ataRM = toRowMajor(ata);
-    for (let c = 0; c < b.cols; c++) {
-      const bCol = new Mat(b.rows, 1, Float64Array.from({ length: b.rows }, (_, r) => b.get2(r, c)));
-      const atbCol = matMul(at, bCol);
-      const colVals = Array.from(atbCol.re);
-      outCols.push(solveSingleColumn(ataRM, colVals, true));
-    }
-    const re = new Float64Array(nRows * b.cols);
-    outCols.forEach((col, c) => col.forEach((v, r) => { re[c * nRows + r] = v; }));
-    return new Mat(nRows, b.cols, re);
-  }
-  function matMul(a, b) {
-    const rows = a.rows, cols = b.cols, inner = a.cols;
-    const re = new Float64Array(rows * cols);
-    for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) {
-      let s = 0;
-      for (let k = 0; k < inner; k++) s += a.re[k * rows + r] * b.re[c * inner + k];
-      re[c * rows + r] = s;
-    }
-    return new Mat(rows, cols, re);
+    return new Mat(n, m, re, im);
   }
   _registerLinalgHooks({ inverse, solve });
 }

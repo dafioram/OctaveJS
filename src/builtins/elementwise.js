@@ -82,7 +82,10 @@ export function registerElementwise(reg) {
   reg.set('sign', { fn: unary((r, i) => { if (r === 0 && i === 0) return [0, 0]; const m = Math.hypot(r, i); return [r / m, i / m]; }) });
   reg.set('floor', { fn: unary((r, i) => [Math.floor(r), Math.floor(i)]) });
   reg.set('ceil', { fn: unary((r, i) => [Math.ceil(r), Math.ceil(i)]) });
-  reg.set('round', { fn: unary((r, i) => [Math.round(r), Math.round(i)]) });
+  // MATLAB rounds halves away from zero (round(-2.5) = -3); JS Math.round
+  // rounds them toward +Inf, so round the magnitude and restore the sign.
+  const roundHalfAway = (x) => Math.sign(x) * Math.round(Math.abs(x));
+  reg.set('round', { fn: unary((r, i) => [roundHalfAway(r), roundHalfAway(i)]) });
   reg.set('fix', { fn: unary((r, i) => [Math.trunc(r), Math.trunc(i)]) });
   reg.set('mod', { fn: binaryReal((a, b) => { if (b === 0) return a; const r = a - Math.floor(a / b) * b; return r; }) });
   reg.set('rem', { fn: binaryReal((a, b) => { if (b === 0) return NaN; const r = a - Math.trunc(a / b) * b; return r; }) });

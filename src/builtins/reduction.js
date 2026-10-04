@@ -34,9 +34,21 @@ function rowsOf(mat) {
   return rows;
 }
 
-// Reduce along `dim` (1=down columns, 2=across rows), fn(values[]) -> {re,im}
+// Reduce along `dim` (1=down columns, 2=across rows), fn(values[]) -> {re,im}.
+// A dim of 3 or more is a singleton dimension of a 2-D array, so each
+// element is reduced on its own (sum(A,3) is A itself, as in MATLAB).
 function reduceAlong(mat, dim, fn) {
   if (mat.isEmpty) return Mat.empty();
+  if (dim >= 3) {
+    const re = new Float64Array(mat.numel);
+    let im = null;
+    for (let k = 0; k < mat.numel; k++) {
+      const r = fn([{ re: mat.re[k], im: mat.isComplex ? mat.im[k] : 0 }]);
+      re[k] = r.re;
+      if (r.im !== 0) { if (!im) im = new Float64Array(mat.numel); im[k] = r.im; }
+    }
+    return new Mat(mat.rows, mat.cols, re, im);
+  }
   if (dim === 1) {
     const cols = columnsOf(mat);
     const results = cols.map(fn);
@@ -58,6 +70,7 @@ function reduceAlong(mat, dim, fn) {
 
 function cumAlong(mat, dim, combine, init) {
   if (mat.isEmpty) return Mat.empty();
+  if (dim >= 3) { const out = mat.clone(); out.isLogical = false; out.isChar = false; return out; }
   const re = new Float64Array(mat.numel);
   const im = mat.isComplex ? new Float64Array(mat.numel) : null;
   if (dim === 1) {
@@ -82,8 +95,12 @@ function cumAlong(mat, dim, combine, init) {
   return new Mat(mat.rows, mat.cols, re, im);
 }
 
-function getDimArg(args) {
-  if (args.length >= 2) return Math.round(args[1].toScalarNumber());
+function getDimArg(args, pos = 1) {
+  if (args.length > pos) {
+    const d = Math.round(args[pos].toScalarNumber());
+    if (!(d >= 1)) throw new MatlabError('Dimension argument must be a positive integer');
+    return d;
+  }
   return null;
 }
 
@@ -117,47 +134,74 @@ export function registerReduction(reg) {
     const denom = sampleCorrection ? Math.max(vals.length - 1, 1) : vals.length;
     return { re: s / denom, im: 0 };
   }
-  reg.set('var', { fn: (args) => [reduceAlong(args[0], getDimArg(args) || defaultDim(args[0]), (v) => variance(v, true))] });
-  reg.set('std', {
-    fn: (args) => {
-      const m = reduceAlong(args[0], getDimArg(args) || defaultDim(args[0]), (v) => variance(v, true));
-      return [Mat.mapElementwise(m, (r) => [Math.sqrt(r), 0])];
-    },
-  });
-
-  function extremum(args, better) {
-    const a = args[0];
-    if (args.length >= 2 && args[1] instanceof Mat && args[1].numel > 0) {
-      // elementwise min/max of two arrays
-      return [Mat.broadcastBinary(a, args[1], (ar, ai, br, bi) => better(ar, br) ? [ar, ai] : [br, bi])];
+  // var(X), var(X, w), var(X, w, dim): w = 0 (or []) normalizes by N-1,
+  // w = 1 by N — the second argument is a weight, not a dimension.
+  function varianceArgs(args) {
+    let population = false;
+    if (args.length >= 2 && !args[1].isEmpty) {
+      const w = args[1].toScalarNumber();
+      if (w !== 0 && w !== 1) throw new MatlabError('Weight argument must be 0 or 1');
+      population = w === 1;
     }
-    const dim = defaultDim(a);
-    if (a.isEmpty) return [Mat.empty(), Mat.empty()];
-    const pick = (vals) => {
-      let bestIdx = 0;
-      for (let i = 1; i < vals.length; i++) if (better(vals[i].re, vals[bestIdx].re) && vals[i].re !== vals[bestIdx].re) bestIdx = i;
-      return { val: vals[bestIdx], idx: bestIdx + 1 };
-    };
-    if (dim === 1) {
-      const cols = columnsOf(a);
-      const picks = cols.map(pick);
-      const re = new Float64Array(picks.length), idxRe = new Float64Array(picks.length);
-      picks.forEach((p, i) => { re[i] = p.val.re; idxRe[i] = p.idx; });
-      return [new Mat(1, picks.length, re), new Mat(1, picks.length, idxRe)];
-    } else {
-      const rows = rowsOf(a);
-      const picks = rows.map(pick);
-      const re = new Float64Array(picks.length), idxRe = new Float64Array(picks.length);
-      picks.forEach((p, i) => { re[i] = p.val.re; idxRe[i] = p.idx; });
-      return [new Mat(picks.length, 1, re), new Mat(picks.length, 1, idxRe)];
-    }
+    const dim = getDimArg(args, 2) || defaultDim(args[0]);
+    return reduceAlong(args[0], dim, (v) => variance(v, !population));
   }
-  reg.set('max', { fn: (args) => extremum(args, (x, y) => x > y) });
-  reg.set('min', { fn: (args) => extremum(args, (x, y) => x < y) });
+  reg.set('var', { fn: (args) => [varianceArgs(args)] });
+  reg.set('std', { fn: (args) => [Mat.mapElementwise(varianceArgs(args), (r) => [Math.sqrt(r), 0])] });
+
+  // max/min: max(X), [m,i] = max(X), max(X,[],dim), max(A,B).
+  // NaNs are ignored unless every candidate is NaN; complex arrays compare
+  // by magnitude (MATLAB's rule).
+  function extremum(args, isMax) {
+    const a = args[0];
+    const better = (x, y) => isMax ? x > y : x < y;
+    if (args.length >= 2 && !args[1].isEmpty) {
+      const b = args[1];
+      const cx = a.isComplex || b.isComplex;
+      const key = (r, i) => cx ? Math.hypot(r, i) : r;
+      return [Mat.broadcastBinary(a, b, (ar, ai, br, bi) => {
+        const ka = key(ar, ai), kb = key(br, bi);
+        if (Number.isNaN(ka)) return [br, bi];
+        if (Number.isNaN(kb)) return [ar, ai];
+        return better(kb, ka) ? [br, bi] : [ar, ai];
+      })];
+    }
+    if (a.isEmpty) return [Mat.empty(), Mat.empty()];
+    const dim = getDimArg(args, 2) || defaultDim(a);
+    const key = (v) => a.isComplex ? Math.hypot(v.re, v.im) : v.re;
+    const pick = (vals) => {
+      let best = -1;
+      for (let i = 0; i < vals.length; i++) {
+        const k = key(vals[i]);
+        if (Number.isNaN(k)) continue;
+        if (best < 0 || better(k, key(vals[best]))) best = i;
+      }
+      if (best < 0) best = 0; // all NaN
+      return { val: vals[best], idx: best + 1 };
+    };
+    let picks, rows, cols;
+    if (dim === 1) { picks = columnsOf(a).map(pick); rows = 1; cols = picks.length; }
+    else if (dim === 2) { picks = rowsOf(a).map(pick); rows = picks.length; cols = 1; }
+    else {
+      picks = Array.from({ length: a.numel }, (_, k) => ({ val: { re: a.re[k], im: a.isComplex ? a.im[k] : 0 }, idx: 1 }));
+      rows = a.rows; cols = a.cols;
+    }
+    const re = new Float64Array(picks.length), idxRe = new Float64Array(picks.length);
+    let im = null;
+    picks.forEach((p, i) => {
+      re[i] = p.val.re; idxRe[i] = p.idx;
+      if (p.val.im !== 0) { if (!im) im = new Float64Array(picks.length); im[i] = p.val.im; }
+    });
+    return [new Mat(rows, cols, re, im), new Mat(rows, cols, idxRe)];
+  }
+  reg.set('max', { fn: (args) => extremum(args, true) });
+  reg.set('min', { fn: (args) => extremum(args, false) });
   reg.set('range', {
     fn: (args) => {
-      const [mx] = extremum(args, (x, y) => x > y);
-      const [mn] = extremum(args, (x, y) => x < y);
+      // range(X, dim): dim is the 2nd argument here, unlike max(X, [], dim).
+      const extArgs = args.length >= 2 ? [args[0], Mat.empty(), args[1]] : [args[0]];
+      const [mx] = extremum(extArgs, true);
+      const [mn] = extremum(extArgs, false);
       return [Mat.broadcastBinary(mx, mn, (ar, _ai, br, _bi) => [ar - br, 0])];
     },
   });

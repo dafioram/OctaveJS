@@ -43,9 +43,9 @@ than a marketing description.
   esbuild to bundle `src/ui/main.js` and everything it imports —
   math.js, Plotly, Papa Parse, CodeMirror 6 — into `dist/main.js`, with
   `dist/index.html` and `dist/styles.css` copied alongside it).
-- **Running the interpreter's own test suite:** `npm test` (130 assertions
-  covering the language core, builtins, plotting, file I/O, and the MAT5
-  codec; see `test/`).
+- **Running the interpreter's own test suite:** `npm test` (about 210
+  assertions covering the language core, builtins, plotting, file I/O, the
+  MAT5 codec, and MATLAB-compatibility regressions; see `test/`).
 
 ## What's implemented
 
@@ -91,7 +91,11 @@ Plotly-native-binned modern equivalent), `figure`, `hold`, `xlabel`/
 
 **I/O:** `readmatrix`/`writematrix` (CSV), `save`/`load` (a real MAT5
 `.mat` writer/reader — see below), `run('script.m')`, and calling a script
-by its bare name if it's been opened in the app.
+by its bare name if it's been opened in the app. A `.m` file that starts
+with `function` is a *function file*: `name(args)` calls its first
+function, and any further functions in it are local subfunctions visible
+only inside that file (a handle like `@helper` created there keeps working
+outside it).
 
 ## What isn't supported, and what to do instead
 
@@ -107,7 +111,6 @@ there's a reasonable workaround, it's listed.
 | Cell arrays (`{1, 2, 3}`, `c{1}`) | Separate variables, or numeric/char arrays where the contents are uniform |
 | N-D arrays (more than 2 subscripts) | Reshape/index a 2-D matrix, or use multiple 2-D matrices |
 | Integer classes (`int8`, `uint16`, ...) — everything is `double` (or tagged `logical`/`char`) | Just use `double`; a trailing class-name argument to `zeros`/`ones` (e.g. `zeros(3,'int8')`) is silently ignored |
-| `true(m,n)` / `false(m,n)` size-constructor forms (bare `true`/`false` literals work fine) | `logical(ones(m,n))` / `logical(zeros(m,n))` |
 | Chained indexed assignment, e.g. `f(x)(y) = 3` | Use an intermediate variable |
 | Name-Value pairs to `plot`, e.g. `plot(x,y,'LineWidth',2)` | Inline linespec strings only, e.g. `plot(x,y,'r--')` |
 | `arrayfun`'s `'UniformOutput', false` / cell outputs | Only the scalar-output form is supported (no cells to hold results in) |
@@ -207,7 +210,7 @@ src/ui/         main.js, matlab-lang.js, styles.css
                 — the browser app: DOM wiring, CodeMirror setup, Plotly
                   glue. Everything here is what actually needs a browser;
                   everything above it is plain, testable JS.
-test/           harness.js + two test files — run with `npm test`.
+test/           harness.js + four test files — run with `npm test`.
 build.mjs       esbuild bundling script -> dist/.
 ```
 
@@ -256,6 +259,16 @@ filesystem or browser.
     `IndexedDB` would only start to pay for itself with much larger or
     more structured data (e.g. saved datasets), which isn't what command
     history is.
+- Values display like MATLAB's default `format short`: integer-valued
+  arrays as integers, everything else with 4 decimals, switching to
+  e-notation for scalars (`1.0000e+10`) or a common `1.0e+03 *` scale
+  factor for arrays whose magnitudes fall outside [0.001, 1000).
+- Typing a bare variable name (`x`) displays `x = ...` and leaves `ans`
+  untouched, as in MATLAB.
+- Recursion is capped at MATLAB's default limit of 500 calls, but the
+  browser's JavaScript stack usually runs out first (a few hundred
+  levels); either way you get a "Maximum recursion depth" error rather
+  than a crash.
 - Reduction functions (`sum`, `mean`, etc.) default to MATLAB's "first
   non-singleton dimension" rule: down each column for a general matrix,
   along the vector itself for a row or column vector. Pass an explicit

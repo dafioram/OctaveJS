@@ -99,12 +99,7 @@ export function registerIO(reg) {
     fn: (args, _n, ctx) => {
       const name = args[0].toJSString();
       const entry = requireFile(ctx, name.endsWith('.m') ? name : name + '.m');
-      const ast = parse(entry.text);
-      for (const stmt of ast.body) if (stmt.type === 'FunctionDef') ctx.interp.funcTable.set(stmt.name, stmt);
-      for (const stmt of ast.body) {
-        if (stmt.type === 'FunctionDef') continue;
-        ctx.interp.execStmt(stmt, ctx.scope);
-      }
+      ctx.interp.runProgram(parse(entry.text), ctx.scope);
       return [];
     },
   });
