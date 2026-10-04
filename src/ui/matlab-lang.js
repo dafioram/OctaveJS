@@ -15,7 +15,7 @@ import { tags as t } from '@lezer/highlight';
 const KEYWORDS = new Set([
   'if', 'elseif', 'else', 'end', 'for', 'while', 'switch', 'case',
   'otherwise', 'break', 'continue', 'return', 'function', 'global',
-  'persistent', 'true', 'false',
+  'persistent', 'try', 'catch', 'true', 'false',
 ]);
 
 const BUILTIN_HINTS = new Set([
@@ -36,7 +36,11 @@ const BUILTIN_HINTS = new Set([
   'find', 'any', 'all', 'isnan', 'isinf', 'isfinite', 'fliplr', 'flipud',
   'flip', 'sort', 'unique', 'repmat', 'cat', 'horzcat', 'vertcat',
   'polyfit', 'polyval', 'interp1', 'strcmp', 'strcmpi', 'upper', 'lower',
-  'strtrim', 'strrep', 'str2double', 'str2num',
+  'strtrim', 'strrep', 'str2double', 'str2num', 'strsplit', 'strjoin', 'func2str',
+  'cell', 'iscell', 'iscellstr', 'cellfun', 'num2cell', 'cell2mat', 'cellstr',
+  'struct', 'fieldnames', 'isfield', 'rmfield', 'isstruct', 'getfield', 'setfield',
+  'struct2cell', 'numfields', 'error', 'warning', 'assert', 'MException', 'throw',
+  'rethrow', 'getReport', 'varargin', 'varargout',
 ]);
 
 function endsValue(prev) {

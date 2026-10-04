@@ -3,7 +3,9 @@
 // Notable design decisions (documented further in README):
 //  - `'` is context-sensitive: transpose operator after a value-producing
 //    token (identifier, number, `)`, `]`, `}`, or another transpose),
-//    otherwise the start of a string literal. This mirrors real MATLAB.
+//    otherwise the start of a string literal — except that inside [...]
+//    or {...}, a `'` preceded by whitespace always starts a string
+//    (`[x 'abc']` is two elements). This mirrors real MATLAB.
 //  - `.'`, `.*`, `./`, `.^`, `.\` are lexed as single two-character operator
 //    tokens. A bare `.` (struct field access) is lexed as DOT; the parser
 //    accepts it so we can raise a clear "structs are not supported" error
@@ -35,7 +37,7 @@ export const TT = Object.freeze({
 const KEYWORDS = new Set([
   'if', 'elseif', 'else', 'end', 'for', 'while', 'switch', 'case',
   'otherwise', 'break', 'continue', 'return', 'function', 'global',
-  'persistent',
+  'persistent', 'try', 'catch',
 ]);
 
 // Tokens after which a `'` means transpose rather than "start a string".
@@ -72,6 +74,7 @@ export function tokenize(source) {
   }
   let sawSpace = false;
   let tokStart = 0; // source offset where the token being lexed began
+  const nesting = []; // open brackets: '(' | '[' | '{'
   function push(type, value) {
     tokens.push({ type, value, line, col, spaceBefore: sawSpace, start: tokStart, end: i });
     sawSpace = false;
@@ -187,7 +190,8 @@ export function tokenize(source) {
 
     // String literal (single-quoted char array) vs transpose
     if (c === "'") {
-      if (endsValue(lastReal())) {
+      const inLiteral = nesting.length > 0 && nesting[nesting.length - 1] !== '(';
+      if (endsValue(lastReal()) && !(inLiteral && sawSpace)) {
         advance();
         push(TT.OP, "'");
         continue;
@@ -230,12 +234,12 @@ export function tokenize(source) {
     }
 
     switch (c) {
-      case '(': advance(); push(TT.LPAREN, '('); continue;
-      case ')': advance(); push(TT.RPAREN, ')'); continue;
-      case '[': advance(); push(TT.LBRACKET, '['); continue;
-      case ']': advance(); push(TT.RBRACKET, ']'); continue;
-      case '{': advance(); push(TT.LBRACE, '{'); continue;
-      case '}': advance(); push(TT.RBRACE, '}'); continue;
+      case '(': advance(); nesting.push('('); push(TT.LPAREN, '('); continue;
+      case ')': advance(); nesting.pop(); push(TT.RPAREN, ')'); continue;
+      case '[': advance(); nesting.push('['); push(TT.LBRACKET, '['); continue;
+      case ']': advance(); nesting.pop(); push(TT.RBRACKET, ']'); continue;
+      case '{': advance(); nesting.push('{'); push(TT.LBRACE, '{'); continue;
+      case '}': advance(); nesting.pop(); push(TT.RBRACE, '}'); continue;
       case ',': advance(); push(TT.COMMA, ','); continue;
       case ';': advance(); push(TT.SEMI, ';'); continue;
       case ':': advance(); push(TT.COLON, ':'); continue;

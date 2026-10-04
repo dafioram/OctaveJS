@@ -1,19 +1,18 @@
 // io.js — File I/O builtins. All operate against `interp.files`, a
-// virtual file store the host UI populates (via file picker / drag-drop)
-// before running code, and can also drain (e.g. to trigger a browser
-// download for `save`/`writematrix`). This keeps the interpreter itself
-// free of any DOM/File-API dependency, so the same code runs under Node
-// for testing.
+// virtual file store the host UI keeps in sync with its saved file list
+// (the Files panel). Files written by `save`/`writematrix` are reported
+// to the host via `host.io.fileWritten` so they appear there too. This
+// keeps the interpreter itself free of any DOM/File-API dependency, so the
+// same code runs under Node for testing.
 //
 // readmatrix's CSV parser is intentionally basic: comma-delimited,
 // newline rows, no quoted-field/embedded-comma support. The UI's
-// drag-and-drop "Import CSV" action uses Papa Parse for messier files and
-// assigns straight into the workspace instead of going through this
-// builtin — see README.
+// File > Import CSV action uses Papa Parse for messier files and assigns
+// straight into the workspace instead of going through this builtin —
+// see README.
 
 import { Mat, FunctionHandle, MatlabError } from '../core/values.js';
 import { encodeMat5, decodeMat5 } from '../mat5/mat5.js';
-import { parse } from '../core/parser.js';
 
 function parseCSV(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
@@ -53,8 +52,9 @@ export function registerIO(reg) {
       const mat = args[0];
       const name = args[1].toJSString();
       const text = writeCSV(mat);
-      ctx.interp.files.set(name, { kind: 'csv', text });
-      if (ctx.host.io && ctx.host.io.downloadText) ctx.host.io.downloadText(name, text);
+      const entry = { kind: 'csv', text };
+      ctx.interp.files.set(name, entry);
+      if (ctx.host.io && ctx.host.io.fileWritten) ctx.host.io.fileWritten(name, entry);
       return [];
     },
   });
@@ -76,9 +76,10 @@ export function registerIO(reg) {
         else skipped.push(n);
       }
       const bytes = encodeMat5(vars);
-      ctx.interp.files.set(name, { kind: 'mat', bytes });
-      if (ctx.host.io && ctx.host.io.downloadBytes) ctx.host.io.downloadBytes(name, bytes);
-      if (skipped.length) ctx.interp.print(`Note: function handles were not saved (unsupported in .mat): ${skipped.join(', ')}\n`);
+      const entry = { kind: 'mat', bytes };
+      ctx.interp.files.set(name, entry);
+      if (ctx.host.io && ctx.host.io.fileWritten) ctx.host.io.fileWritten(name, entry);
+      if (skipped.length) ctx.interp.print(`Note: only numeric, char and logical arrays can be saved to .mat; skipped: ${skipped.join(', ')}\n`);
       return [];
     },
   });
@@ -98,8 +99,13 @@ export function registerIO(reg) {
   reg.set('run', {
     fn: (args, _n, ctx) => {
       const name = args[0].toJSString();
-      const entry = requireFile(ctx, name.endsWith('.m') ? name : name + '.m');
-      ctx.interp.runProgram(parse(entry.text), ctx.scope);
+      const file = name.endsWith('.m') ? name : name + '.m';
+      requireFile(ctx, file);
+      // A function file runs its main function with no inputs (like the
+      // editor's Run button in MATLAB); a script runs in the caller's workspace.
+      const info = ctx.interp.loadMFile(file.slice(0, -2));
+      if (info.kind === 'function') ctx.interp.callUserFunction(info.primary, [], 0);
+      else ctx.interp.runProgram(info.ast, ctx.scope);
       return [];
     },
   });

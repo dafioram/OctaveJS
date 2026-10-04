@@ -172,11 +172,9 @@ function checkThrowsMsg(label, fn, substr) {
 {
   const { run } = makeInterp();
   checkThrowsMsg('double-quoted strings rejected', () => run('x = "hello";'), 'single quotes');
-  checkThrowsMsg('struct field access rejected', () => run('s.x = 1;'), 'structs');
-  checkThrowsMsg('cell array rejected', () => run('c = {1,2,3};'), 'not supported');
-  checkThrowsMsg('cell indexing rejected', () => run('c{1};'), 'not supported');
+  checkThrowsMsg('brace indexing an undefined name', () => run('c{1};'), 'Undefined');
   checkThrowsMsg('N-D indexing rejected', () => run('A=[1 2;3 4]; A(1,1,1);'), 'more than 2 subscripts');
-  checkThrowsMsg('chained indexed assignment rejected', () => run('f(1)(2) = 3;'), 'not supported');
+  checkThrowsMsg('chained ()() assignment rejected', () => run('f(1)(2) = 3;'), '()-indexing must appear last');
 }
 
 // ---------------- semicolon suppression at top level (regression test:

@@ -24,7 +24,8 @@ export class ParseError extends Error {
   }
 }
 
-const BLOCK_CLOSERS = new Set(['end', 'elseif', 'else', 'case', 'otherwise']);
+const BLOCK_CLOSERS = new Set(['end', 'elseif', 'else', 'case', 'otherwise', 'catch']);
+const ASSIGNABLE = new Set(['Ident', 'Index', 'Field', 'DynField', 'CellIndex']);
 
 // A small, deliberately narrow whitelist for MATLAB's "command syntax"
 // (bare-word arguments, no parens: `hold on` instead of `hold('on')`).
@@ -136,6 +137,7 @@ class Parser {
         case 'for': return this.parseFor();
         case 'while': return this.parseWhile();
         case 'switch': return this.parseSwitch();
+        case 'try': return this.parseTry();
         case 'function': return this.parseFunctionDef();
         case 'break': this.advance(); return { type: 'Break' };
         case 'continue': this.advance(); return { type: 'Continue' };
@@ -198,7 +200,7 @@ class Parser {
     if (this.at(TT.EQUALS)) {
       this.advance();
       const rhs = this.parseExpr();
-      if (!(expr.type === 'Ident' || expr.type === 'Index' || expr.type === 'Field')) {
+      if (!ASSIGNABLE.has(expr.type)) {
         throw new ParseError('Invalid assignment target', this.cur());
       }
       return { type: 'Assign', target: expr, expr: rhs, suppressed: false };
@@ -214,7 +216,7 @@ class Parser {
         if (this.at(TT.OP, '~')) { this.advance(); targets.push({ type: 'Tilde' }); }
         else {
           let node = this.parsePostfix(this.parsePrimary());
-          if (!(node.type === 'Ident' || node.type === 'Index' || node.type === 'Field')) return null;
+          if (!ASSIGNABLE.has(node.type)) return null;
           targets.push(node);
         }
         if (this.at(TT.COMMA)) this.advance();
@@ -309,6 +311,26 @@ class Parser {
     }
     this.expect(TT.KEYWORD, 'end');
     return { type: 'Switch', expr, cases, otherwiseBody };
+  }
+
+  // try ... catch [ME] ... end. An identifier on the same line as `catch`
+  // (and alone there) names the caught MException, as in MATLAB.
+  parseTry() {
+    this.advance(); // try
+    const body = this.parseBlockBody('catch', 'end');
+    let ident = null;
+    let catchBody = [];
+    if (this.atKw('catch')) {
+      const catchTok = this.advance();
+      const next = this.peek(1);
+      if (this.at(TT.IDENT) && this.cur().line === catchTok.line &&
+          (!next || [TT.NEWLINE, TT.SEMI, TT.COMMA, TT.EOF].includes(next.type) || (next.type === TT.KEYWORD && next.value === 'end'))) {
+        ident = this.advance().value;
+      }
+      catchBody = this.parseBlockBody('end');
+    }
+    this.expect(TT.KEYWORD, 'end');
+    return { type: 'Try', body, ident, catchBody };
   }
 
   parseFunctionDef() {
@@ -439,6 +461,10 @@ class Parser {
 
   parsePostfix(node) {
     for (;;) {
+      // Inside [...] or {...}, whitespace before `(`/`{` starts a new
+      // element: `[a (1)]` is two elements, `[a(1)]` is an index.
+      const inLiteral = this.bracketStack[this.bracketStack.length - 1] === 'bracket';
+      if (inLiteral && (this.at(TT.LPAREN) || this.at(TT.LBRACE)) && this.cur().spaceBefore) break;
       if (this.at(TT.OP, "'") || this.at(TT.OP, ".'")) {
         const conj = this.cur().value === "'";
         this.advance();
@@ -465,6 +491,16 @@ class Parser {
       }
       if (this.at(TT.DOT)) {
         this.advance();
+        if (this.at(TT.LPAREN)) {
+          // dynamic field name: s.(expr)
+          this.advance();
+          this.bracketStack.push('paren');
+          const nameExpr = this.parseExpr();
+          this.bracketStack.pop();
+          this.expect(TT.RPAREN);
+          node = { type: 'DynField', target: node, nameExpr };
+          continue;
+        }
         const name = this.expect(TT.IDENT).value;
         node = { type: 'Field', target: node, name };
         continue;
@@ -516,7 +552,7 @@ class Parser {
     }
 
     if (t.type === TT.LBRACE) {
-      throw new ParseError('Cell arrays ({...}) are not supported in this app', t);
+      return this.parseMatrixLiteral(TT.LBRACE, TT.RBRACE, 'CellLit');
     }
 
     if (t.type === TT.AT) {
@@ -542,13 +578,15 @@ class Parser {
     throw new ParseError('Unexpected token in expression', t);
   }
 
-  parseMatrixLiteral() {
-    this.expect(TT.LBRACKET);
+  // Parses `[...]` (MatrixLit) or `{...}` (CellLit) — same row/element
+  // rules for both: `,`/whitespace separate elements, `;`/newline rows.
+  parseMatrixLiteral(openType = TT.LBRACKET, closeType = TT.RBRACKET, nodeType = 'MatrixLit') {
+    this.expect(openType);
     this.bracketStack.push('bracket');
     const rows = [[]];
     // consume leading newlines/semicolons (blank rows before first element)
     while (this.at(TT.SEMI) || this.at(TT.NEWLINE)) this.advance();
-    while (!this.at(TT.RBRACKET)) {
+    while (!this.at(closeType)) {
       const row = rows[rows.length - 1];
       const elemStartTok = this.cur();
       const elem = this.parseMatrixElement();
@@ -559,24 +597,24 @@ class Parser {
       if (this.at(TT.SEMI)) {
         this.advance();
         while (this.at(TT.SEMI) || this.at(TT.NEWLINE)) this.advance();
-        if (!this.at(TT.RBRACKET)) rows.push([]);
+        if (!this.at(closeType)) rows.push([]);
         continue;
       }
       if (this.at(TT.NEWLINE)) {
         this.advance();
         while (this.at(TT.SEMI) || this.at(TT.NEWLINE)) this.advance();
-        if (!this.at(TT.RBRACKET)) rows.push([]);
+        if (!this.at(closeType)) rows.push([]);
         continue;
       }
-      if (this.at(TT.RBRACKET)) break;
+      if (this.at(closeType)) break;
       // Otherwise: space-separated next element continues the same row
       // (handled by looping back; parseMatrixElement re-checks for a
       // leading unary sign vs. binary continuation using spaceBefore).
     }
     this.bracketStack.pop();
-    this.expect(TT.RBRACKET);
-    if (rows.length === 1 && rows[0].length === 0) return { type: 'MatrixLit', rows: [] };
-    return { type: 'MatrixLit', rows };
+    this.expect(closeType);
+    if (rows.length === 1 && rows[0].length === 0) return { type: nodeType, rows: [] };
+    return { type: nodeType, rows };
   }
 
   // Parses one matrix element, applying MATLAB's whitespace-sensitive rule:

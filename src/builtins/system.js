@@ -2,7 +2,7 @@
 // printing (disp/fprintf/sprintf/num2str), and workspace management
 // (who/whos/clear/exist), plus feval/arrayfun/deal.
 
-import { Mat, FunctionHandle, MatlabError, colonRange } from '../core/values.js';
+import { Mat, Cell, FunctionHandle, MatlabError, colonRange, valueClassName } from '../core/values.js';
 import { formatValue } from '../core/interpreter.js';
 import { parse } from '../core/parser.js';
 import { HELP_DATA } from './help-data.js';
@@ -35,7 +35,7 @@ function formatNumForPrint(x) {
 // A pragmatic sprintf: supports %d %i %f %g %e %s %% with optional
 // width/precision (e.g. %6.2f), recycling the format string across the
 // flattened list of numeric/char arguments the way MATLAB's sprintf does.
-function doSprintf(fmt, valueList) {
+export function doSprintf(fmt, valueList) {
   // MATLAB's fprintf/sprintf process C-style backslash escapes in the
   // format string itself (independently of how the string literal was
   // written), so `fprintf('done\n')` really does emit a newline.
@@ -83,9 +83,10 @@ function doSprintf(fmt, valueList) {
   return out;
 }
 
-function flattenArgsForPrintf(args) {
+export function flattenArgsForPrintf(args) {
   const vals = [];
   for (const a of args) {
+    if (!(a instanceof Mat)) throw new MatlabError(`Formatted printing doesn't accept ${valueClassName(a)} arguments; pass the contents instead (e.g. c{:} or s.field)`);
     if (a.isChar) vals.push(a.toJSString());
     else for (let k = 0; k < a.numel; k++) vals.push(a.re[k]);
   }
@@ -191,11 +192,11 @@ export function registerSystem(reg) {
     },
   });
 
-  reg.set('class', { fn: (args) => [Mat.fromString(args[0] instanceof FunctionHandle ? 'function_handle' : args[0].className())] });
+  reg.set('class', { fn: (args) => [Mat.fromString(valueClassName(args[0]))] });
   reg.set('isa', {
     fn: (args) => {
       const cn = args[1].toJSString();
-      const actual = args[0] instanceof FunctionHandle ? 'function_handle' : args[0].className();
+      const actual = valueClassName(args[0]);
       const numericAliases = (cn === 'numeric' || cn === 'float' || cn === 'double') && actual === 'double';
       return [Mat.logicalScalar(actual === cn || numericAliases)];
     },
@@ -203,7 +204,7 @@ export function registerSystem(reg) {
   reg.set('isnumeric', { fn: (args) => [Mat.logicalScalar(args[0] instanceof Mat && !args[0].isChar && !args[0].isLogical)] });
   reg.set('ischar', { fn: (args) => [Mat.logicalScalar(args[0] instanceof Mat && args[0].isChar)] });
   reg.set('islogical', { fn: (args) => [Mat.logicalScalar(args[0] instanceof Mat && args[0].isLogical)] });
-  reg.set('isreal', { fn: (args) => [Mat.logicalScalar(!args[0].isComplex)] });
+  reg.set('isreal', { fn: (args) => [Mat.logicalScalar(args[0] instanceof Mat && !args[0].isComplex)] });
   reg.set('iscomplex', { fn: (args) => [Mat.logicalScalar(!!args[0].isComplex)] });
   reg.set('is_function_handle', { fn: (args) => [Mat.logicalScalar(args[0] instanceof FunctionHandle)] });
 
@@ -293,8 +294,8 @@ export function registerSystem(reg) {
       let text = 'Name         Size       Class\n';
       for (const n of names) {
         const v = ctx.scope.get(n);
-        if (v instanceof Mat) text += `${n.padEnd(12)} ${v.sizeStr().padEnd(10)} ${v.className()}\n`;
-        else text += `${n.padEnd(12)} ${'1x1'.padEnd(10)} function_handle\n`;
+        const size = v instanceof FunctionHandle ? '1x1' : v.sizeStr();
+        text += `${n.padEnd(12)} ${size.padEnd(10)} ${valueClassName(v)}\n`;
       }
       ctx.interp.print(text);
       return [];
@@ -302,11 +303,14 @@ export function registerSystem(reg) {
   });
   reg.set('clear', {
     fn: (args, _n, ctx) => {
-      if (args.length === 0) { ctx.scope.vars.clear(); return []; }
-      // note: clear takes variable *names*, evaluated builtins get values;
-      // handled specially in the interpreter dispatch below is overkill,
-      // so we accept char-array names too, for `clear('x')` style calls.
-      for (const a of args) { if (a.isChar) ctx.scope.vars.delete(a.toJSString()); }
+      // `clear`, `clear all`, `clear variables` empty the workspace;
+      // otherwise each argument names a variable (`clear x y`, clear('x')).
+      const names = args.filter(a => a instanceof Mat && a.isChar).map(a => a.toJSString());
+      if (names.length === 0 || names.some(n => n === 'all' || n === '-all' || n === 'variables' || n === '-variables')) {
+        ctx.scope.clearAll();
+        return [];
+      }
+      for (const n of names) ctx.scope.delete(n);
       return [];
     },
   });
@@ -330,23 +334,6 @@ export function registerSystem(reg) {
       return ctx.interp.callNamed(name, rest, nargout, ctx.scope);
     },
   });
-  reg.set('arrayfun', {
-    fn: (args, nargout, ctx) => {
-      const f = args[0];
-      const arrays = args.slice(1).filter(a => a instanceof Mat);
-      const n = arrays[0].numel;
-      for (const a of arrays) if (a.numel !== n) throw new MatlabError('arrayfun: all array inputs must have the same number of elements');
-      const re = new Float64Array(n);
-      let im = null;
-      for (let k = 0; k < n; k++) {
-        const callArgs = arrays.map(a => new Mat(1, 1, new Float64Array([a.re[k]]), a.isComplex ? new Float64Array([a.im[k]]) : null));
-        const [r] = ctx.interp.callFunctionValue(f, callArgs, 1, ctx.scope);
-        re[k] = r.re[0];
-        if (r.isComplex && r.im[0] !== 0) { if (!im) im = new Float64Array(n); im[k] = r.im[0]; }
-      }
-      return [new Mat(arrays[0].rows, arrays[0].cols, re, im)];
-    },
-  });
   reg.set('func2str', {
     fn: (args) => {
       if (!(args[0] instanceof FunctionHandle)) throw new MatlabError('func2str: input must be a function handle');
@@ -362,8 +349,32 @@ export function registerSystem(reg) {
   });
 
   // ---- string utilities (cheap and useful now that char arrays exist) ----
-  reg.set('strcmp', { fn: (args) => [Mat.logicalScalar(args[0].isChar && args[1].isChar && args[0].toJSString() === args[1].toJSString())] });
-  reg.set('strcmpi', { fn: (args) => [Mat.logicalScalar(args[0].isChar && args[1].isChar && args[0].toJSString().toLowerCase() === args[1].toJSString().toLowerCase())] });
+  // strcmp/strcmpi compare text; with a cell array of strings on either
+  // side they compare element by element and return a logical array.
+  function strCompare(args, fold) {
+    const norm = (v) => (v instanceof Mat && v.isChar && v.rows <= 1) ? (fold ? v.toJSString().toLowerCase() : v.toJSString()) : null;
+    const [a, b] = args;
+    if (!(a instanceof Cell) && !(b instanceof Cell)) {
+      const x = norm(a), y = norm(b);
+      return Mat.logicalScalar(x !== null && y !== null && x === y);
+    }
+    const ca = a instanceof Cell ? a : null, cb = b instanceof Cell ? b : null;
+    if (ca && cb && ca.numel !== 1 && cb.numel !== 1 && (ca.rows !== cb.rows || ca.cols !== cb.cols)) {
+      throw new MatlabError('Inputs must be the same size or either one can be a scalar.');
+    }
+    const shape = ca && ca.numel !== 1 ? ca : (cb && cb.numel !== 1 ? cb : (ca || cb));
+    const n = shape.numel;
+    const out = Mat.zeros(shape.rows, shape.cols);
+    for (let k = 0; k < n; k++) {
+      const x = norm(ca ? ca.data[ca.numel === 1 ? 0 : k] : a);
+      const y = norm(cb ? cb.data[cb.numel === 1 ? 0 : k] : b);
+      out.re[k] = x !== null && y !== null && x === y ? 1 : 0;
+    }
+    out.isLogical = true;
+    return out;
+  }
+  reg.set('strcmp', { fn: (args) => [strCompare(args, false)] });
+  reg.set('strcmpi', { fn: (args) => [strCompare(args, true)] });
   reg.set('upper', { fn: (args) => [Mat.fromString(args[0].toJSString().toUpperCase())] });
   reg.set('lower', { fn: (args) => [Mat.fromString(args[0].toJSString().toLowerCase())] });
   reg.set('strtrim', { fn: (args) => [Mat.fromString(args[0].toJSString().trim())] });
@@ -371,18 +382,6 @@ export function registerSystem(reg) {
     fn: (args) => {
       const s = args[0].toJSString(), from = args[1].toJSString(), to = args[2].toJSString();
       return [Mat.fromString(from === '' ? s : s.split(from).join(to))];
-    },
-  });
-  reg.set('strsplit', {
-    fn: (args) => {
-      const s = args[0].toJSString();
-      const delim = args.length >= 2 ? args[1].toJSString() : ' ';
-      const parts = s.split(delim).filter(p => p !== '');
-      // No cell arrays in this app: return the pieces vertically concatenated
-      // as a char matrix isn't right either (ragged widths), so this is
-      // deliberately limited — see README. Most useful with strjoin/strcmp
-      // on a single expected piece, or just avoid strsplit for now.
-      throw new MatlabError("strsplit's result would be a cell array, which isn't supported. Use strtrim/strrep, or String.split-like manual parsing via a loop, instead.");
     },
   });
   reg.set('str2double', {

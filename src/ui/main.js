@@ -1,15 +1,17 @@
-// main.js — App entry point. Wires the Interpreter core up to the DOM:
-// the Command Window REPL, the CodeMirror script editor, the workspace
-// browser, the Plotly figures panel, and the File/Edit/View/Help menus.
-// No framework — plain DOM, since the surface area here is small enough
-// that a framework would add more ceremony than it would save.
+// main.js — App entry point. Wires the interpreter session (running in a
+// Web Worker — see backend.js / src/worker/session.js) up to the DOM: the
+// Command Window REPL, the multi-file CodeMirror script editor, the
+// Workspace / History / Files sidebar, the Plotly figures panel, and the
+// File/Edit/View/Help menus. No framework — plain DOM, since the surface
+// area here is small enough that a framework would add more ceremony than
+// it would save.
 
 import Plotly from 'plotly.js-dist-min';
 import Papa from 'papaparse';
 
-import { Interpreter } from '../core/interpreter.js';
-import { buildBuiltinsRegistry } from '../builtins/index.js';
-import { Mat, FunctionHandle } from '../core/values.js';
+import { createBackend } from './backend.js';
+import { openVfs, kindFor, isTextKind } from './vfs.js';
+import { Mat, serializeValue } from '../core/values.js';
 
 import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection, dropCursor, rectangularSelection, crosshairCursor } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
@@ -19,56 +21,21 @@ import { closeBrackets, closeBracketsKeymap, autocompletion, completeFromList, c
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { matlabLanguageSupport, matlabHighlighting, matlabCompletionWords } from './matlab-lang.js';
 
-// ---------------------------------------------------------------------
-// Interpreter + host wiring
-// ---------------------------------------------------------------------
-
 const consoleOutputEl = document.getElementById('console-output');
 const consoleInputEl = document.getElementById('console-input');
+const stopBtn = document.getElementById('stop-button');
+const busyEl = document.getElementById('busy-indicator');
 const workspaceListEl = document.getElementById('workspace-list');
+const filesListEl = document.getElementById('files-list');
 const figureMountEl = document.getElementById('figure-mount');
 const figureTabStripEl = document.getElementById('figure-tab-strip');
+const editorTabsEl = document.getElementById('editor-tabs');
 
-const figurePlotDivs = new Map(); // figNum -> div element
-let activeFigureNum = null;
-let figuresTouchedThisRun = []; // figure numbers touched during the run in progress, in first-touch order
+const EXAMPLE_SCRIPT = `% New script\nx = linspace(0, 2*pi, 100);\ny = sin(x);\nplot(x, y, 'b-');\nxlabel('x'); ylabel('sin(x)'); title('Example');\n`;
 
-function trackFigureTouch(figNum) {
-  if (!figuresTouchedThisRun.includes(figNum)) figuresTouchedThisRun.push(figNum);
-}
-
-// After a command or script finishes, actually draw whatever figure(s) it
-// touched, once each, using their final state — rather than redrawing on
-// every individual plot/xlabel/ylabel/title/etc. call along the way. This
-// avoids redundant work and (more importantly) means a figure only ever
-// gets drawn with its complete, final layout, never a partial one from
-// mid-script.
-function drawTouchedFigures() {
-  for (const figNum of figuresTouchedThisRun) {
-    const fig = interp.figures && interp.figures.get(figNum);
-    if (fig) renderFigure(figNum, fig.traces, fig.layout);
-  }
-}
-
-// After drawing, bring whatever figure(s) this run touched into view:
-// straight to it if there's one, or a ~1s-paced flip through all of them
-// in the order they were created if there are several.
-function revealTouchedFigures() {
-  const touched = figuresTouchedThisRun;
-  figuresTouchedThisRun = [];
-  const stillOpen = touched.filter(n => figurePlotDivs.has(n));
-  if (stillOpen.length === 0) return;
-  switchTab('figures');
-  if (stillOpen.length === 1) { switchFigureTab(stillOpen[0]); return; }
-  let i = 0;
-  const showNext = () => {
-    if (i >= stillOpen.length) return;
-    switchFigureTab(stillOpen[i]);
-    i++;
-    if (i < stillOpen.length) setTimeout(showNext, 1000);
-  };
-  showNext();
-}
+// ---------------------------------------------------------------------
+// Console
+// ---------------------------------------------------------------------
 
 function appendConsoleLine(text, cls = '') {
   const div = document.createElement('div');
@@ -77,28 +44,6 @@ function appendConsoleLine(text, cls = '') {
   consoleOutputEl.appendChild(div);
   consoleOutputEl.scrollTop = consoleOutputEl.scrollHeight;
 }
-
-const host = {
-  print(text) {
-    if (!text) return;
-    appendConsoleLine(text);
-  },
-  clearConsole() {
-    consoleOutputEl.innerHTML = '';
-  },
-  figures: {
-    // Both entry points (an actual plot call, and a bare figure(n) switch)
-    // just record that this figure needs attention; the real draw happens
-    // once, after the whole command/script finishes — see
-    // drawTouchedFigures().
-    render(figNum) { trackFigureTouch(figNum); },
-    show(figNum) { trackFigureTouch(figNum); },
-  },
-  io: {
-    downloadText(name, text) { downloadBlob(name, new Blob([text], { type: 'text/csv' })); },
-    downloadBytes(name, bytes) { downloadBlob(name, new Blob([bytes], { type: 'application/octet-stream' })); },
-  },
-};
 
 function downloadBlob(name, blob) {
   const url = URL.createObjectURL(blob);
@@ -110,8 +55,148 @@ function downloadBlob(name, blob) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-const interp = new Interpreter(host);
-interp.registerBuiltins(buildBuiltinsRegistry());
+function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+// ---------------------------------------------------------------------
+// Session state mirror (used to restore the workspace after Stop)
+// ---------------------------------------------------------------------
+//
+// The worker reports what changed after every command (`delta`). We keep
+// the accumulated state here; Stop terminates the worker and starts a new
+// one initialized from this mirror, i.e. from just before the command.
+
+const mirror = {
+  vars: new Map(), globalNames: [], globals: [], persistents: [], funcTable: [],
+  figureState: { current: 1, hold: false }, figures: new Map(),
+};
+
+function applyDelta(d) {
+  if (!d) return;
+  for (const [name, value] of d.vars) mirror.vars.set(name, value);
+  for (const name of d.deleted) mirror.vars.delete(name);
+  mirror.globalNames = d.globalNames;
+  if (d.globals) mirror.globals = d.globals;
+  if (d.persistents) mirror.persistents = d.persistents;
+  if (d.funcTable) mirror.funcTable = d.funcTable;
+  if (d.figureState) mirror.figureState = d.figureState;
+}
+
+function initMessage() {
+  return {
+    type: 'init',
+    files: [...vfs.files.entries()],
+    snapshot: {
+      vars: [...mirror.vars.entries()], globalNames: mirror.globalNames, globals: mirror.globals,
+      persistents: mirror.persistents, funcTable: mirror.funcTable, figureState: mirror.figureState,
+      figures: [...mirror.figures.entries()],
+    },
+  };
+}
+
+// ---------------------------------------------------------------------
+// Running commands (one at a time; later ones queue)
+// ---------------------------------------------------------------------
+
+let backend = null;
+let busy = false;
+let nextRunId = 1;
+const runQueue = [];
+const varRequests = new Map(); // id -> callback
+let pendingDownload = null;    // file to download once the session writes it
+
+function setBusy(b) {
+  busy = b;
+  busyEl.classList.toggle('active', b);
+  stopBtn.disabled = !b || !backend.canStop;
+  stopBtn.title = backend && !backend.canStop ? 'Stop is unavailable here: this browser could not start a Web Worker, so commands run on the page itself' : 'Stop the running command (Ctrl+C)';
+}
+
+function enqueueRun(src) {
+  runQueue.push(src);
+  if (!busy) runNext();
+}
+
+function runNext() {
+  if (runQueue.length === 0) { setBusy(false); return; }
+  setBusy(true);
+  backend.send({ type: 'run', id: nextRunId++, src: runQueue.shift() });
+}
+
+function stopRunning() {
+  if (!busy || !backend.canStop) return;
+  runQueue.length = 0;
+  backend.restart(initMessage());
+  appendConsoleLine('Operation terminated by user. The workspace was restored to its state before the command.', 'error');
+  setBusy(false);
+}
+stopBtn.addEventListener('click', stopRunning);
+
+function handleMessage(msg) {
+  switch (msg.type) {
+    case 'ready':
+      renderWorkspace(msg.workspace);
+      return;
+    case 'print':
+      if (msg.text) appendConsoleLine(msg.text);
+      return;
+    case 'clc':
+      consoleOutputEl.innerHTML = '';
+      return;
+    case 'fileWritten':
+      saveFile(msg.name, msg.entry, { sync: false });
+      if (pendingDownload === msg.name) { pendingDownload = null; downloadFile(msg.name); }
+      return;
+    case 'done':
+      if (msg.error) appendConsoleLine(msg.error, 'error');
+      applyDelta(msg.delta);
+      renderWorkspace(msg.workspace);
+      for (const { num, fig } of msg.figures) {
+        if (fig) mirror.figures.set(num, fig); else mirror.figures.delete(num);
+      }
+      showFigures(msg.figures);
+      runNext();
+      return;
+    case 'workspace':
+      applyDelta(msg.delta);
+      renderWorkspace(msg.workspace);
+      return;
+    case 'var': {
+      const cb = varRequests.get(msg.id);
+      varRequests.delete(msg.id);
+      if (cb) cb(msg.value);
+      return;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+// Figures
+// ---------------------------------------------------------------------
+
+const figurePlotDivs = new Map(); // figNum -> div element
+let activeFigureNum = null;
+
+// After a command finishes, draw each figure it touched once (with its
+// final state), then bring it into view — straight to it if there's one,
+// or a ~1s-paced flip through all of them in order if there are several.
+function showFigures(entries) {
+  const drawn = [];
+  for (const { num, fig } of entries) {
+    if (!fig) continue;
+    renderFigure(num, fig.traces, fig.layout);
+    drawn.push(num);
+  }
+  if (drawn.length === 0) return;
+  switchTab('figures');
+  let i = 0;
+  const showNext = () => {
+    if (i >= drawn.length) return;
+    switchFigureTab(drawn[i]);
+    i++;
+    if (i < drawn.length) setTimeout(showNext, 1000);
+  };
+  showNext();
+}
 
 function renderFigure(figNum, traces, layout) {
   if (!figurePlotDivs.has(figNum)) {
@@ -145,7 +230,7 @@ function rebuildFigureTabStrip() {
     label.onclick = () => switchFigureTab(figNum);
     const closeBtn = document.createElement('button');
     closeBtn.className = 'figure-tab-close';
-    closeBtn.textContent = '\u00d7';
+    closeBtn.textContent = '×';
     closeBtn.title = 'Close figure';
     closeBtn.setAttribute('aria-label', `Close Figure ${figNum}`);
     closeBtn.onclick = (ev) => { ev.stopPropagation(); closeFigure(figNum); };
@@ -158,22 +243,15 @@ function rebuildFigureTabStrip() {
 function switchFigureTab(figNum) {
   if (!figurePlotDivs.has(figNum)) return;
   activeFigureNum = figNum;
-  for (const [n, div] of figurePlotDivs.entries()) {
-    div.style.display = (n === figNum) ? 'block' : 'none';
-  }
+  for (const [n, div] of figurePlotDivs.entries()) div.style.display = (n === figNum) ? 'block' : 'none';
   rebuildFigureTabStrip();
   // A figure drawn while its div was display:none gets laid out against a
   // zero-size container, which makes Plotly silently skip title/axis-label
-  // positioning (they never get drawn, and don't reappear on their own
-  // once the div becomes visible). Recompute now that it actually has
-  // real dimensions — deferred a frame so the browser has applied the
-  // display change and reflowed before Plotly measures the container.
+  // positioning. Recompute a frame later, once it has real dimensions.
   const activeDiv = figurePlotDivs.get(figNum);
-  if (activeDiv) {
-    requestAnimationFrame(() => {
-      try { Plotly.Plots.resize(activeDiv); } catch (e) { /* figure may have been closed by the time this fires */ }
-    });
-  }
+  requestAnimationFrame(() => {
+    try { Plotly.Plots.resize(activeDiv); } catch (e) { /* figure may have been closed by the time this fires */ }
+  });
 }
 
 function closeFigure(figNum) {
@@ -183,11 +261,10 @@ function closeFigure(figNum) {
     div.remove();
     figurePlotDivs.delete(figNum);
   }
-  interp.figures.delete(figNum);
-
+  mirror.figures.delete(figNum);
+  backend.send({ type: 'closeFigure', num: figNum });
   if (figurePlotDivs.size === 0) {
     activeFigureNum = null;
-    interp.figureState.current = undefined;
     figureMountEl.innerHTML = '<div class="figure-empty">No figures yet — try <code>plot(1:10, sin(1:10))</code> in the Command Window.</div>';
     rebuildFigureTabStrip();
     return;
@@ -204,21 +281,15 @@ function closeFigure(figNum) {
 // Workspace panel
 // ---------------------------------------------------------------------
 
-function renderWorkspace() {
-  const names = [...interp.workspace.names()].sort();
+function renderWorkspace(vars) {
   workspaceListEl.innerHTML = '';
-  if (names.length === 0) {
+  if (!vars || vars.length === 0) {
     workspaceListEl.innerHTML = '<div class="workspace-empty">No variables yet</div>';
     return;
   }
-  for (const name of names) {
-    const v = interp.workspace.get(name);
+  for (const { name, size, cls } of vars) {
     const row = document.createElement('div');
     row.className = 'workspace-row';
-    const isFn = v instanceof FunctionHandle;
-    const sizeStr = isFn ? 'handle' : v.sizeStr();
-    const clsStr = isFn ? 'function_handle' : v.className();
-
     const main = document.createElement('div');
     main.className = 'workspace-row-main';
     const nameEl = document.createElement('span');
@@ -226,42 +297,81 @@ function renderWorkspace() {
     nameEl.textContent = name;
     const delBtn = document.createElement('button');
     delBtn.className = 'var-delete';
-    delBtn.textContent = '\u00d7';
+    delBtn.textContent = '×';
     delBtn.title = `Delete ${name}`;
     delBtn.setAttribute('aria-label', `Delete variable ${name}`);
-    delBtn.onclick = (ev) => { ev.stopPropagation(); deleteVariable(name); };
+    delBtn.onclick = (ev) => { ev.stopPropagation(); backend.send({ type: 'deleteVar', name }); };
     main.appendChild(nameEl);
     main.appendChild(delBtn);
-
     const meta = document.createElement('div');
     meta.className = 'var-meta';
-    meta.textContent = `${sizeStr}  ${clsStr}`;
-
+    meta.textContent = `${size}  ${cls}`;
     row.appendChild(main);
     row.appendChild(meta);
-    if (!isFn) row.onclick = () => showMatrixModal(name, v);
+    row.onclick = () => showVariable(name);
     workspaceListEl.appendChild(row);
   }
 }
 
-function deleteVariable(name) {
-  interp.workspace.vars.delete(name);
-  renderWorkspace();
+function showVariable(name) {
+  if (busy) { appendConsoleLine('The variable viewer is unavailable while a command is running.', 'error'); return; }
+  const id = nextRunId++;
+  varRequests.set(id, (value) => { if (value) showVariableModal(name, value); });
+  backend.send({ type: 'getVar', id, name });
 }
 
-function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function fmtNum(x) {
+  if (Number.isNaN(x)) return 'NaN';
+  if (!Number.isFinite(x)) return x > 0 ? 'Inf' : '-Inf';
+  return Number.isInteger(x) ? String(x) : Number(x.toPrecision(5)).toString();
+}
+
+function showVariableModal(name, v) {
+  let body;
+  if (v.kind === 'matrix') {
+    let html = '<table><tbody>';
+    for (let r = 0; r < v.rows; r++) {
+      html += '<tr>';
+      for (let c = 0; c < v.cols; c++) {
+        const re = v.re[c * v.rows + r];
+        const im = v.im ? v.im[c * v.rows + r] : 0;
+        html += `<td>${im !== 0 ? `${fmtNum(re)}${im < 0 ? '-' : '+'}${fmtNum(Math.abs(im))}i` : fmtNum(re)}</td>`;
+      }
+      html += '</tr>';
+    }
+    body = html + '</tbody></table>';
+  } else {
+    body = `<pre class="modal-pre">${escapeHtml(v.text)}</pre>`;
+  }
+  const box = document.getElementById('modal-box');
+  box.innerHTML = `<button class="modal-close" data-action="close-modal">&times;</button><h2>${escapeHtml(name)} <small style="color:var(--ink-faint);font-weight:normal;">(${escapeHtml(v.size)} ${escapeHtml(v.cls)})</small></h2>${body}`;
+  openModal();
+}
 
 // ---------------------------------------------------------------------
-// Sidebar: Workspace / Command History sub-tabs
+// Sidebar: Workspace / History / Files sub-tabs
 // ---------------------------------------------------------------------
 
-document.getElementById('sidebar-subtabs').addEventListener('click', (ev) => {
-  const btn = ev.target.closest('.sidebar-subtab');
-  if (!btn) return;
-  const name = btn.dataset.subtab;
+function switchSidebar(name) {
   document.querySelectorAll('.sidebar-subtab').forEach(b => b.classList.toggle('active', b.dataset.subtab === name));
   document.querySelectorAll('.sidebar-view').forEach(v => v.classList.toggle('active', v.dataset.subview === name));
+}
+document.getElementById('sidebar-subtabs').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('.sidebar-subtab');
+  if (btn) switchSidebar(btn.dataset.subtab);
 });
+
+const HISTORY_KEY = 'matweb_history';
+let history_ = [];
+try { history_ = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch (e) { history_ = []; }
+let historyPos = history_.length;
+
+function pushHistory(cmd) {
+  history_.push(cmd);
+  historyPos = history_.length;
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history_.slice(-500))); } catch (e) { /* storage may be unavailable; history just won't persist */ }
+  renderHistoryList();
+}
 
 function renderHistoryList() {
   const listEl = document.getElementById('history-list');
@@ -281,71 +391,265 @@ function renderHistoryList() {
   }
 }
 
-function showMatrixModal(name, mat) {
-  const box = document.getElementById('modal-box');
-  let body;
-  if (mat.isChar) {
-    body = `<p>${escapeHtml(mat.toJSString())}</p>`;
-  } else if (mat.numel > 2000) {
-    body = `<p>${mat.sizeStr()} ${mat.className()} — too large to preview here (${mat.numel} elements). Use <code>disp(${escapeHtml(name)})</code> in the Command Window instead.</p>`;
-  } else {
-    let html = '<table><tbody>';
-    for (let r = 0; r < mat.rows; r++) {
-      html += '<tr>';
-      for (let c = 0; c < mat.cols; c++) {
-        const re = mat.re[c * mat.rows + r];
-        const im = mat.isComplex ? mat.im[c * mat.rows + r] : 0;
-        const text = im !== 0 ? `${fmtNum(re)}${im < 0 ? '-' : '+'}${fmtNum(Math.abs(im))}i` : fmtNum(re);
-        html += `<td>${text}</td>`;
-      }
-      html += '</tr>';
-    }
-    html += '</tbody></table>';
-    body = html;
-  }
-  box.innerHTML = `<button class="modal-close" data-action="close-modal">&times;</button><h2>${escapeHtml(name)} <small style="color:var(--ink-faint);font-weight:normal;">(${mat.sizeStr()} ${mat.className()})</small></h2>${body}`;
-  openModal();
+// ---------------------------------------------------------------------
+// Files (saved in IndexedDB, mirrored into the session)
+// ---------------------------------------------------------------------
+
+let vfs = null;
+
+function fileSizeStr(entry) {
+  const n = entry.text !== undefined ? entry.text.length : (entry.bytes ? entry.bytes.length : 0);
+  return n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
-function fmtNum(x) { return Number.isInteger(x) ? String(x) : Number(x.toPrecision(5)).toString(); }
+
+// Saves a file to IndexedDB and (unless it came from the session itself)
+// to the session's file store.
+function saveFile(name, entry, { sync = true } = {}) {
+  const rec = vfs.put(name, entry);
+  if (sync) backend.send({ type: 'putFile', name, entry: rec });
+  renderFilesList();
+}
+
+function deleteFile(name) {
+  vfs.remove(name);
+  backend.send({ type: 'deleteFile', name });
+  if (openTabs.includes(name)) closeTab(name, { force: true });
+  renderFilesList();
+}
+
+function downloadFile(name) {
+  const entry = vfs.files.get(name);
+  if (!entry) return;
+  const blob = entry.text !== undefined
+    ? new Blob([entry.text], { type: 'text/plain' })
+    : new Blob([entry.bytes], { type: 'application/octet-stream' });
+  downloadBlob(name, blob);
+}
+
+function renderFilesList() {
+  filesListEl.innerHTML = '';
+  const names = [...vfs.files.keys()].sort((a, b) => a.localeCompare(b));
+  if (names.length === 0) {
+    filesListEl.innerHTML = '<div class="workspace-empty">No files yet</div>';
+    return;
+  }
+  for (const name of names) {
+    const entry = vfs.files.get(name);
+    const row = document.createElement('div');
+    row.className = 'workspace-row file-row';
+    const main = document.createElement('div');
+    main.className = 'workspace-row-main';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'var-name';
+    nameEl.textContent = name;
+    const actions = document.createElement('span');
+    actions.className = 'file-actions';
+    const dl = document.createElement('button');
+    dl.className = 'var-delete';
+    dl.textContent = '⤓';
+    dl.title = `Download ${name}`;
+    dl.setAttribute('aria-label', `Download ${name}`);
+    dl.onclick = (ev) => { ev.stopPropagation(); downloadFile(name); };
+    const del = document.createElement('button');
+    del.className = 'var-delete';
+    del.textContent = '×';
+    del.title = `Delete ${name}`;
+    del.setAttribute('aria-label', `Delete ${name}`);
+    del.onclick = (ev) => { ev.stopPropagation(); if (confirm(`Delete ${name}?`)) deleteFile(name); };
+    actions.appendChild(dl);
+    actions.appendChild(del);
+    main.appendChild(nameEl);
+    main.appendChild(actions);
+    const meta = document.createElement('div');
+    meta.className = 'var-meta';
+    meta.textContent = fileSizeStr(entry);
+    row.appendChild(main);
+    row.appendChild(meta);
+    if (entry.kind === 'm') { row.title = 'Open in the Script Editor'; row.onclick = () => openTab(name); }
+    filesListEl.appendChild(row);
+  }
+  if (!vfs.persistent) {
+    const note = document.createElement('div');
+    note.className = 'workspace-empty';
+    note.textContent = 'Browser storage is unavailable, so files will be lost when the page closes.';
+    filesListEl.appendChild(note);
+  }
+}
+
+async function uploadFiles(fileList, { open = false } = {}) {
+  for (const file of fileList) {
+    const kind = kindFor(file.name);
+    const entry = isTextKind(kind) ? { kind, text: await file.text() } : { kind, bytes: new Uint8Array(await file.arrayBuffer()) };
+    saveFile(file.name, entry);
+    if (open && kind === 'm') openTab(file.name);
+  }
+}
+
+function uniqueName(base, ext) {
+  let name = `${base}${ext}`;
+  for (let k = 2; vfs.files.has(name); k++) name = `${base}${k}${ext}`;
+  return name;
+}
+
+// ---------------------------------------------------------------------
+// Script editor (CodeMirror 6), one tab per open .m file
+// ---------------------------------------------------------------------
+
+const TABS_KEY = 'matweb_open_tabs';
+let openTabs = [];
+let activeFile = null;
+const editorStates = new Map(); // file name -> EditorState
+let saveTimer = null;
+
+const matlabSupport = matlabLanguageSupport();
+const editorExtensions = [
+  lineNumbers(), history(), drawSelection(), dropCursor(), rectangularSelection(), crosshairCursor(),
+  highlightActiveLine(), highlightSelectionMatches(), indentOnInput(), bracketMatching(), closeBrackets(),
+  matlabSupport, ...matlabHighlighting,
+  matlabSupport.language.data.of({ autocomplete: completeFromList(matlabCompletionWords.map(label => ({ label, type: 'keyword' }))) }),
+  autocompletion(),
+  keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...completionKeymap, indentWithTab]),
+  EditorView.theme({ '&': { height: '100%' } }),
+  // Edits are saved automatically, shortly after typing stops.
+  EditorView.updateListener.of((u) => { if (u.docChanged) scheduleSave(); }),
+];
+
+const editorView = new EditorView({ parent: document.getElementById('editor-mount'), state: EditorState.create({ doc: '', extensions: editorExtensions }) });
+
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(flushSave, 400);
+}
+function flushSave() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  if (!activeFile) return;
+  const text = editorView.state.doc.toString();
+  const cur = vfs.files.get(activeFile);
+  if (!cur || cur.text !== text) saveFile(activeFile, { kind: 'm', text });
+}
+
+function persistTabs() {
+  try { localStorage.setItem(TABS_KEY, JSON.stringify({ tabs: openTabs, active: activeFile })); } catch (e) { /* not critical */ }
+}
+
+function openTab(name) {
+  if (!vfs.files.has(name)) return;
+  flushSave();
+  if (activeFile) editorStates.set(activeFile, editorView.state);
+  if (!openTabs.includes(name)) openTabs.push(name);
+  if (!editorStates.has(name)) editorStates.set(name, EditorState.create({ doc: vfs.files.get(name).text || '', extensions: editorExtensions }));
+  activeFile = name;
+  editorView.setState(editorStates.get(name));
+  document.getElementById('editor-filename').textContent = name;
+  renderEditorTabs();
+  persistTabs();
+  switchTab('editor');
+}
+
+function closeTab(name, { force = false } = {}) {
+  if (!force && name === activeFile) flushSave();
+  openTabs = openTabs.filter(n => n !== name);
+  editorStates.delete(name);
+  if (activeFile === name) {
+    activeFile = null;
+    if (openTabs.length) openTab(openTabs[openTabs.length - 1]);
+    else {
+      editorView.setState(EditorState.create({ doc: '', extensions: editorExtensions }));
+      document.getElementById('editor-filename').textContent = '(no file open)';
+    }
+  }
+  renderEditorTabs();
+  persistTabs();
+}
+
+function renderEditorTabs() {
+  editorTabsEl.innerHTML = '';
+  for (const name of openTabs) {
+    const tab = document.createElement('div');
+    tab.className = 'figure-tab editor-tab' + (name === activeFile ? ' active' : '');
+    const label = document.createElement('span');
+    label.className = 'figure-tab-label';
+    label.textContent = name;
+    label.onclick = () => openTab(name);
+    const close = document.createElement('button');
+    close.className = 'figure-tab-close';
+    close.textContent = '×';
+    close.title = `Close ${name}`;
+    close.setAttribute('aria-label', `Close ${name}`);
+    close.onclick = (ev) => { ev.stopPropagation(); closeTab(name); };
+    tab.appendChild(label);
+    tab.appendChild(close);
+    editorTabsEl.appendChild(tab);
+  }
+}
+
+function newScript() {
+  const name = uniqueName('untitled', '.m');
+  saveFile(name, { kind: 'm', text: '' });
+  openTab(name);
+}
+
+function renameActiveFile() {
+  if (!activeFile) return;
+  flushSave();
+  let name = prompt('Rename script:', activeFile);
+  if (name === null) return;
+  name = name.trim();
+  if (!name || name === activeFile) return;
+  if (!/\.m$/i.test(name)) name += '.m';
+  if (!/^[A-Za-z][A-Za-z0-9_]*\.m$/.test(name)) { alert('Script names must start with a letter and contain only letters, digits and underscores.'); return; }
+  if (vfs.files.has(name) && !confirm(`${name} already exists. Replace it?`)) return;
+  const old = activeFile;
+  const state = editorView.state;
+  saveFile(name, { kind: 'm', text: state.doc.toString() });
+  vfs.remove(old);
+  backend.send({ type: 'deleteFile', name: old });
+  openTabs = openTabs.map(n => (n === old ? name : n)).filter((n, i, all) => all.indexOf(n) === i);
+  editorStates.delete(old);
+  editorStates.set(name, state);
+  activeFile = name;
+  document.getElementById('editor-filename').textContent = name;
+  renderEditorTabs();
+  renderFilesList();
+  persistTabs();
+}
+document.getElementById('editor-filename').addEventListener('click', renameActiveFile);
+
+function runFullScript() {
+  if (!activeFile) return;
+  flushSave();
+  const cmd = `run('${activeFile.replace(/'/g, "''")}')`;
+  switchTab('command');
+  appendConsoleLine(cmd, 'echo');
+  pushHistory(cmd);
+  enqueueRun(cmd);
+}
+
+function runSelectionOrAll() {
+  const sel = editorView.state.selection.main;
+  if (sel.from === sel.to) { runFullScript(); return; } // no selection -> same as Run
+  const text = editorView.state.sliceDoc(sel.from, sel.to);
+  switchTab('command');
+  // Not pushed to history: a selection snippet isn't reliably re-runnable
+  // later the way a named script or typed command is.
+  appendConsoleLine(`% running ${text.split('\n').length} selected line(s) from ${activeFile}`, 'echo');
+  enqueueRun(text);
+}
+
+document.querySelector('[data-action="run-script"]').addEventListener('click', runFullScript);
+document.querySelector('[data-action="run-selection"]').addEventListener('click', runSelectionOrAll);
 
 // ---------------------------------------------------------------------
 // Command window (REPL)
 // ---------------------------------------------------------------------
-
-const HISTORY_KEY = 'matweb_history';
-let history_ = [];
-try { history_ = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch (e) { history_ = []; }
-let historyPos = history_.length;
-
-function pushHistory(cmd) {
-  history_.push(cmd);
-  historyPos = history_.length;
-  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history_.slice(-500))); } catch (e) { /* storage may be unavailable; history just won't persist */ }
-  renderHistoryList();
-}
-
-// Runs source through the interpreter, handling errors, refreshing the
-// workspace panel, and revealing any figure(s) it produced. Shared by
-// typed commands, "Run", and "Run selection" — history logging is
-// layered on top by the callers that want it (see runCommand/runFullScript
-// vs. runSelectionOrAll).
-function executeSource(src) {
-  try {
-    interp.runSource(src);
-  } catch (e) {
-    appendConsoleLine((e && e.message) ? e.message : String(e), 'error');
-  }
-  renderWorkspace();
-  drawTouchedFigures();
-  revealTouchedFigures();
-}
 
 function runCommand(cmd) {
   if (!cmd.trim()) return;
   switchTab('command');
   appendConsoleLine(cmd, 'echo');
   pushHistory(cmd);
-  executeSource(cmd);
+  enqueueRun(cmd);
 }
 
 consoleInputEl.addEventListener('keydown', (ev) => {
@@ -357,11 +661,12 @@ consoleInputEl.addEventListener('keydown', (ev) => {
     if (historyPos > 0) { historyPos--; consoleInputEl.value = history_[historyPos] || ''; }
     ev.preventDefault();
   } else if (ev.key === 'ArrowDown') {
-    if (historyPos < history_.length) {
-      historyPos++;
-      consoleInputEl.value = history_[historyPos] || '';
-    }
+    if (historyPos < history_.length) { historyPos++; consoleInputEl.value = history_[historyPos] || ''; }
     ev.preventDefault();
+  } else if (ev.key === 'c' && ev.ctrlKey && busy && consoleInputEl.selectionStart === consoleInputEl.selectionEnd) {
+    // Ctrl+C with nothing selected stops the running command, like MATLAB.
+    ev.preventDefault();
+    stopRunning();
   }
 });
 
@@ -379,88 +684,6 @@ document.getElementById('tab-bar').addEventListener('click', (ev) => {
   const btn = ev.target.closest('.tab-button');
   if (btn) switchTab(btn.dataset.tab);
 });
-
-// ---------------------------------------------------------------------
-// Script editor (CodeMirror 6)
-// ---------------------------------------------------------------------
-
-let currentFilename = 'untitled.m';
-function setCurrentFilename(name) {
-  currentFilename = name;
-  document.getElementById('editor-filename').textContent = currentFilename;
-}
-document.getElementById('editor-filename').addEventListener('click', () => {
-  let name = prompt('Rename script:', currentFilename);
-  if (name === null) return;
-  name = name.trim();
-  if (!name) return;
-  if (!/\.m$/i.test(name)) name += '.m';
-  setCurrentFilename(name);
-});
-
-const matlabSupport = matlabLanguageSupport();
-const editorCompletion = matlabSupport.language.data.of({
-  autocomplete: completeFromList(matlabCompletionWords.map(label => ({ label, type: 'keyword' }))),
-});
-
-const editorView = new EditorView({
-  parent: document.getElementById('editor-mount'),
-  state: EditorState.create({
-    doc: `% New script\nx = linspace(0, 2*pi, 100);\ny = sin(x);\nplot(x, y, 'b-');\nxlabel('x'); ylabel('sin(x)'); title('Example');\n`,
-    extensions: [
-      lineNumbers(),
-      history(),
-      drawSelection(),
-      dropCursor(),
-      rectangularSelection(),
-      crosshairCursor(),
-      highlightActiveLine(),
-      highlightSelectionMatches(),
-      indentOnInput(),
-      bracketMatching(),
-      closeBrackets(),
-      matlabSupport,
-      ...matlabHighlighting,
-      editorCompletion,
-      autocompletion(),
-      keymap.of([
-        ...closeBracketsKeymap,
-        ...defaultKeymap,
-        ...searchKeymap,
-        ...historyKeymap,
-        ...completionKeymap,
-        indentWithTab,
-      ]),
-      EditorView.theme({ '&': { height: '100%' } }),
-    ],
-  }),
-});
-
-function runFullScript() {
-  const text = editorView.state.doc.toString();
-  interp.files.set(currentFilename, { kind: 'm', text });
-  const cmd = `run('${currentFilename}')`;
-  switchTab('command');
-  appendConsoleLine(cmd, 'echo');
-  pushHistory(cmd);
-  executeSource(cmd);
-}
-
-function runSelectionOrAll() {
-  const sel = editorView.state.selection.main;
-  if (sel.from === sel.to) { runFullScript(); return; } // no selection -> same as Run
-  const text = editorView.state.sliceDoc(sel.from, sel.to);
-  const lineCount = text.split('\n').length;
-  switchTab('command');
-  // Not pushed to history: a selection snippet isn't reliably re-runnable
-  // later the way a named script or typed command is, so it's shown here
-  // for transparency but doesn't clutter Command History with it.
-  appendConsoleLine(`% running ${lineCount} selected line(s) from ${currentFilename}`, 'echo');
-  executeSource(text);
-}
-
-document.querySelector('[data-action="run-script"]').addEventListener('click', runFullScript);
-document.querySelector('[data-action="run-selection"]').addEventListener('click', runSelectionOrAll);
 
 // ---------------------------------------------------------------------
 // Menu bar
@@ -481,47 +704,25 @@ menubar.addEventListener('click', (ev) => {
     if (!wasOpen) menuItem.classList.add('open');
   }
 });
-document.addEventListener('click', (ev) => {
-  if (!ev.target.closest('.menu-item')) closeAllMenus();
-});
+document.addEventListener('click', (ev) => { if (!ev.target.closest('.menu-item')) closeAllMenus(); });
 function closeAllMenus() { document.querySelectorAll('.menu-item.open').forEach(m => m.classList.remove('open')); }
 
 function handleMenuAction(action) {
   switch (action) {
-    case 'new-script':
-      if (editorView.state.doc.length === 0 || confirm('Discard current script and start a new one?')) {
-        editorView.dispatch({ changes: { from: 0, to: editorView.state.doc.length, insert: '' } });
-        setCurrentFilename('untitled.m');
-      }
-      switchTab('editor');
-      break;
-    case 'open-m':
-      document.getElementById('file-input-m').click();
-      break;
-    case 'save-m': {
-      const text = editorView.state.doc.toString();
-      downloadBlob(currentFilename, new Blob([text], { type: 'text/plain' }));
-      break;
-    }
-    case 'import-csv':
-      document.getElementById('file-input-csv').click();
-      break;
-    case 'open-mat':
-      document.getElementById('file-input-mat').click();
-      break;
+    case 'new-script': newScript(); break;
+    case 'open-m': document.getElementById('file-input-m').click(); break;
+    case 'save-m': if (activeFile) { flushSave(); downloadFile(activeFile); } break;
+    case 'upload-files': document.getElementById('file-input-any').click(); break;
+    case 'import-csv': document.getElementById('file-input-csv').click(); break;
+    case 'open-mat': document.getElementById('file-input-mat').click(); break;
     case 'save-mat':
-      interp.callNamed('save', [Mat.fromString('workspace.mat')], 0, interp.workspace);
-      switchTab('command');
+      pendingDownload = 'workspace.mat';
+      runCommand("save('workspace.mat')");
       break;
     case 'clear-workspace':
-      if (confirm('Clear all variables from the workspace?')) {
-        interp.workspace.vars.clear();
-        renderWorkspace();
-      }
+      if (confirm('Clear all variables from the workspace?')) backend.send({ type: 'clearVars' });
       break;
-    case 'clear-console':
-      host.clearConsole();
-      break;
+    case 'clear-console': consoleOutputEl.innerHTML = ''; break;
     case 'clear-history':
       if (confirm('Clear command history?')) {
         history_ = []; historyPos = 0;
@@ -532,6 +733,7 @@ function handleMenuAction(action) {
     case 'focus-command': switchTab('command'); break;
     case 'focus-editor': switchTab('editor'); break;
     case 'focus-figures': switchTab('figures'); break;
+    case 'focus-files': switchSidebar('files'); break;
     case 'show-help': showHelpModal(); break;
     case 'show-about': showAboutModal(); break;
     case 'close-modal': closeModal(); break;
@@ -539,50 +741,55 @@ function handleMenuAction(action) {
 }
 
 document.getElementById('file-input-m').addEventListener('change', async (ev) => {
-  const file = ev.target.files[0];
-  if (!file) return;
-  const text = await file.text();
-  editorView.dispatch({ changes: { from: 0, to: editorView.state.doc.length, insert: text } });
-  setCurrentFilename(file.name);
-  switchTab('editor');
+  await uploadFiles(ev.target.files, { open: true });
   ev.target.value = '';
 });
 
-document.getElementById('file-input-csv').addEventListener('change', (ev) => {
-  const file = ev.target.files[0];
-  if (!file) return;
-  Papa.parse(file, {
-    complete(results) {
-      const rows = results.data
-        .filter(row => row.some(cell => String(cell).trim() !== ''))
-        .map(row => row.map(cell => parseFloat(cell)));
-      const varName = prompt(`Import "${file.name}" as which variable name?`, 'data') || 'data';
-      interp.workspace.set(varName, Mat.fromRows(rows));
-      renderWorkspace();
-      appendConsoleLine(`Imported ${file.name} as ${varName} (${rows.length}x${rows[0]?.length || 0})`, 'echo');
-      switchTab('command');
-    },
-  });
+document.getElementById('file-input-any').addEventListener('change', async (ev) => {
+  await uploadFiles(ev.target.files);
+  switchSidebar('files');
   ev.target.value = '';
+});
+
+document.getElementById('file-input-csv').addEventListener('change', async (ev) => {
+  const file = ev.target.files[0];
+  ev.target.value = '';
+  if (!file) return;
+  const text = await file.text();
+  saveFile(file.name, { kind: 'text', text });
+  const results = Papa.parse(text);
+  const rows = results.data
+    .filter(row => row.some(cell => String(cell).trim() !== ''))
+    .map(row => row.map(cell => parseFloat(cell)));
+  const varName = prompt(`Import "${file.name}" as which variable name?`, 'data') || 'data';
+  if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(varName)) { appendConsoleLine(`'${varName}' is not a valid variable name.`, 'error'); return; }
+  backend.send({ type: 'setVar', name: varName, value: serializeValue(Mat.fromRows(rows)) });
+  appendConsoleLine(`Imported ${file.name} as ${varName} (${rows.length}x${rows[0]?.length || 0})`, 'echo');
+  switchTab('command');
 });
 
 document.getElementById('file-input-mat').addEventListener('change', async (ev) => {
   const file = ev.target.files[0];
-  if (!file) return;
-  const buf = new Uint8Array(await file.arrayBuffer());
-  interp.files.set(file.name, { kind: 'mat', bytes: buf });
-  try {
-    interp.callNamed('load', [Mat.fromString(file.name)], 0, interp.workspace);
-    renderWorkspace();
-  } catch (e) {
-    appendConsoleLine(`Could not load ${file.name}: ${e.message}`, 'error');
-  }
-  switchTab('command');
   ev.target.value = '';
+  if (!file) return;
+  saveFile(file.name, { kind: 'mat', bytes: new Uint8Array(await file.arrayBuffer()) });
+  runCommand(`load('${file.name.replace(/'/g, "''")}')`);
 });
 
+// Drag and drop files anywhere onto the app to add them to Files.
+document.addEventListener('dragover', (ev) => { if (ev.dataTransfer && [...ev.dataTransfer.types].includes('Files')) ev.preventDefault(); });
+document.addEventListener('drop', async (ev) => {
+  if (!ev.dataTransfer || ev.dataTransfer.files.length === 0) return;
+  ev.preventDefault();
+  await uploadFiles(ev.dataTransfer.files, { open: ev.dataTransfer.files.length === 1 });
+  switchSidebar('files');
+});
+
+document.getElementById('files-new').addEventListener('click', newScript);
+document.getElementById('files-upload').addEventListener('click', () => document.getElementById('file-input-any').click());
+
 // ---------------------------------------------------------------------
-// Modal (help / about / matrix viewer share this overlay)
+// Modal (help / about / variable viewer share this overlay)
 // ---------------------------------------------------------------------
 
 const modalOverlay = document.getElementById('modal-overlay');
@@ -597,7 +804,7 @@ function showAboutModal() {
   document.getElementById('modal-box').innerHTML = `
     <button class="modal-close" data-action="close-modal">&times;</button>
     <h2>MatWeb</h2>
-    <p>A lightweight, offline-capable, MATLAB-compatible console that runs entirely in your browser — a real lexer/parser/interpreter, not a wrapper around a remote service. Nothing you type ever leaves this page.</p>
+    <p>A lightweight, offline-capable, MATLAB-compatible console that runs entirely in your browser — a real lexer/parser/interpreter, not a wrapper around a remote service. Nothing you type ever leaves this page; your scripts and data files are stored in this browser.</p>
     <p>See the bundled README for exactly what MATLAB syntax is and isn't supported.</p>
   `;
   openModal();
@@ -607,13 +814,15 @@ function showHelpModal() {
   document.getElementById('modal-box').innerHTML = `
     <button class="modal-close" data-action="close-modal">&times;</button>
     <h2>Supported functions &amp; key limitations</h2>
-    <p><strong>Language:</strong> variables, matrices/vectors, complex numbers, if/for/while/switch, functions (incl. multiple outputs, anonymous functions, recursion), global/persistent, logical &amp; numeric indexing, auto-growing arrays, element/row/column deletion via <code>[]</code>.</p>
+    <p><strong>Language:</strong> variables, matrices/vectors, complex numbers, cell arrays (<code>{...}</code>, <code>c{i}</code>, <code>c{:}</code>), structs (<code>s.a.b = 1</code>, struct arrays, <code>s.(name)</code>), if/for/while/switch, try/catch, functions (multiple outputs, <code>varargin</code>/<code>varargout</code>, anonymous functions, recursion), function files, global/persistent, logical &amp; numeric indexing, auto-growing arrays, deletion via <code>[]</code>.</p>
     <p><strong>Math:</strong> trig/exp/log family, sum/mean/std/var/min/max/median, sort/unique/find/any/all, isnan/isinf/isfinite, fliplr/flipud/flip/repmat/cat, size/reshape/diag/triu/tril, det/trace/rank/norm/dot/cross/inv/pinv/eig/svd/lu/qr, fft/ifft, polyfit/polyval/interp1.</p>
-    <p><strong>Plotting:</strong> plot, scatter, bar, histogram, hist, figure, hold, xlabel/ylabel/title, legend, grid, xlim/ylim, axis. Close a figure with the &times; on its tab.</p>
-    <p><strong>Strings:</strong> strcmp/strcmpi, upper/lower, strtrim, strrep, str2double, str2num.</p>
-    <p><strong>Console:</strong> <code>clc</code> clears the Command Window. <code>help('name')</code> shows syntax for any function. Click a script's filename in the editor toolbar to rename it before saving. The left sidebar has a History tab alongside Workspace — click any past command to run it again.</p>
-    <p><strong>I/O:</strong> readmatrix/writematrix (CSV), save/load (a real, rudimentary MAT5 <code>.mat</code> writer/reader — not HDF5; see README), run (execute a script from the virtual file list).</p>
-    <p><strong>Not supported:</strong> structs, cell arrays, string arrays (double-quoted), N-D arrays, integer classes. Command syntax (bareword args, no parens) works for <code>clear</code>, <code>hold</code>, <code>grid</code>, <code>axis</code>, <code>disp</code> only — anything else needs the parenthesized form. Full list with rationale is in the README shipped alongside this app.</p>
+    <p><strong>Cells &amp; structs:</strong> cell, cellfun, arrayfun, num2cell, cell2mat, cellstr, iscell, iscellstr, struct, fieldnames, isfield, rmfield, isstruct, getfield, setfield, struct2cell.</p>
+    <p><strong>Errors:</strong> error, warning, assert, MException, throw/rethrow, getReport.</p>
+    <p><strong>Strings:</strong> strcmp/strcmpi, upper/lower, strtrim, strrep, strsplit, strjoin, str2double, str2num, sprintf, num2str.</p>
+    <p><strong>Plotting:</strong> plot, scatter, bar, histogram, hist, figure, hold, xlabel/ylabel/title, legend, grid, xlim/ylim, axis.</p>
+    <p><strong>Files:</strong> scripts and data live in the <em>Files</em> sidebar tab and are saved in this browser. Drag files onto the page to add them. <code>save</code>/<code>writematrix</code> write there too; use the &#x2913; button to download a file.</p>
+    <p><strong>Console:</strong> commands run in the background — press <em>Stop</em> (or Ctrl+C in the command line) to interrupt one; the workspace returns to its state before that command. <code>clc</code> clears the window, <code>help('name')</code> shows syntax.</p>
+    <p><strong>Not supported:</strong> string arrays (double-quoted), N-D arrays, integer classes, classdef. Command syntax (bareword args) works for <code>clear</code>, <code>hold</code>, <code>grid</code>, <code>axis</code>, <code>disp</code> only. Full list in the README.</p>
   `;
   openModal();
 }
@@ -622,7 +831,25 @@ function showHelpModal() {
 // Boot
 // ---------------------------------------------------------------------
 
-appendConsoleLine('MatWeb — a lightweight MATLAB-compatible console. Type a command below, or open the Script Editor tab.', 'echo');
-renderWorkspace();
-renderHistoryList();
-consoleInputEl.focus();
+async function boot() {
+  appendConsoleLine('MatWeb — a lightweight MATLAB-compatible console. Type a command below, or open the Script Editor tab.', 'echo');
+  renderHistoryList();
+
+  vfs = await openVfs();
+  if (vfs.files.size === 0) vfs.put('untitled.m', { kind: 'm', text: EXAMPLE_SCRIPT });
+  backend = createBackend(handleMessage);
+  backend.start(initMessage());
+  setBusy(false);
+  renderFilesList();
+
+  // Reopen the editor tabs from last time.
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(TABS_KEY) || 'null'); } catch (e) { saved = null; }
+  const restoreTabs = (saved && Array.isArray(saved.tabs) ? saved.tabs : ['untitled.m']).filter(n => vfs.files.has(n));
+  for (const name of restoreTabs) if (!openTabs.includes(name)) openTabs.push(name);
+  const firstTab = saved && vfs.files.has(saved.active) ? saved.active : (openTabs[0] || [...vfs.files.keys()].find(n => n.endsWith('.m')));
+  if (firstTab) openTab(firstTab);
+  switchTab('command');
+}
+
+boot();

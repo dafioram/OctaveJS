@@ -10,15 +10,31 @@
 // 1-based positions) — this distinction is called out in the design brief
 // as essential, and is the reason the tag exists at all.
 //
-// Function handles are a separate class, `FunctionHandle`.
+// Function handles are a separate class, `FunctionHandle`; cell arrays
+// are `Cell` and structs are `StructArray` (both 2-D arrays of elements,
+// column-major like Mat).
 //
-// NOT modeled at all: cell arrays, structs, string arrays (double-quoted),
-// categorical/table types, integer classes (int8/uint8/...), sparse
-// matrices. See README "What isn't supported".
+// Copy-on-write: every value carries `_refs`, the number of places that
+// hold it (workspace slots, cell/struct slots, closures). An indexed
+// assignment may modify a value in place only when it has a single
+// holder; otherwise it copies first. Counting errs high, never low — an
+// over-count only costs an extra copy, an under-count would let one
+// variable's assignment leak into another.
+//
+// NOT modeled at all: string arrays (double-quoted), categorical/table
+// types, integer classes (int8/uint8/...), sparse matrices, N-D arrays.
+// See README "What isn't supported".
 
 export class MatlabError extends Error {
-  constructor(message) { super(message); this.name = 'MatlabError'; }
+  constructor(message, identifier = '') {
+    super(message);
+    this.name = 'MatlabError';
+    this.identifier = identifier;
+  }
 }
+
+export function retain(v) { if (v && typeof v === 'object' && '_refs' in v) v._refs++; return v; }
+export function release(v) { if (v && typeof v === 'object' && '_refs' in v && v._refs > 0) v._refs--; }
 
 export class Mat {
   constructor(rows, cols, re, im = null, opts = {}) {
@@ -28,6 +44,7 @@ export class Mat {
     this.im = im; // Float64Array or null
     this.isLogical = !!opts.isLogical;
     this.isChar = !!opts.isChar;
+    this._refs = 0;
   }
 
   get numel() { return this.rows * this.cols; }
@@ -217,5 +234,137 @@ export class FunctionHandle {
     if (this.name) return `@${this.name}`;
     if (this.params) return `@(${this.params.join(',')})${this.source !== null ? this.source : ' ...'}`;
     return '@(function handle)';
+  }
+}
+
+// ---------------- containers: cell arrays and structs ----------------
+
+function shapeStr(rows, cols) { return `${rows}x${cols}`; }
+
+class ElementArray {
+  constructor(rows, cols, data) {
+    this.rows = rows;
+    this.cols = cols;
+    this.data = data; // plain Array, column-major, length rows*cols
+    this._refs = 0;
+  }
+  get numel() { return this.rows * this.cols; }
+  get isVector() { return this.rows === 1 || this.cols === 1; }
+  get isScalar() { return this.rows === 1 && this.cols === 1; }
+  get isEmpty() { return this.rows === 0 || this.cols === 0; }
+  get isComplex() { return false; }
+  sizeStr() { return shapeStr(this.rows, this.cols); }
+}
+
+export class Cell extends ElementArray {
+  // `data` holds values (Mat, Cell, StructArray, FunctionHandle). The
+  // constructor takes ownership and retains each element.
+  constructor(rows, cols, data) {
+    super(rows, cols, data || Array.from({ length: rows * cols }, () => Mat.empty()));
+    for (const v of this.data) retain(v);
+  }
+  static empty(rows = 0, cols = 0) { return new Cell(rows, cols); }
+  className() { return 'cell'; }
+  // Shallow copy: a new container whose elements are shared (and retained).
+  clone() { return new Cell(this.rows, this.cols, this.data.slice()); }
+  setLin(k, v) { if (this.data[k] !== v) { retain(v); release(this.data[k]); this.data[k] = v; } }
+  isCellstr() { return this.data.every(v => v instanceof Mat && v.isChar && (v.rows === 1 || v.isEmpty)); }
+}
+
+export class StructArray extends ElementArray {
+  // `data` holds one Map(fieldName -> value) per element; every element
+  // has exactly the fields in `fieldNames` (in that order).
+  constructor(rows, cols, fieldNames = [], data = null, classOverride = null) {
+    super(rows, cols, data || Array.from({ length: rows * cols }, () => new Map(fieldNames.map(f => [f, Mat.empty()]))));
+    this.fieldNames = fieldNames.slice();
+    this.classOverride = classOverride; // e.g. 'MException'
+    for (const el of this.data) for (const v of el.values()) retain(v);
+  }
+  static scalar(fields = {}) {
+    const names = Object.keys(fields);
+    return new StructArray(1, 1, names, [new Map(names.map(n => [n, fields[n]]))]);
+  }
+  className() { return this.classOverride || 'struct'; }
+  // Copies the per-element Maps (never shared between arrays) but shares,
+  // and retains, the field values themselves.
+  clone() {
+    return new StructArray(this.rows, this.cols, this.fieldNames, this.data.map(el => new Map(el)), this.classOverride);
+  }
+  hasField(name) { return this.fieldNames.includes(name); }
+  addField(name) {
+    if (this.hasField(name)) return;
+    this.fieldNames.push(name);
+    for (const el of this.data) el.set(name, Mat.empty());
+  }
+  setField(k, name, v) {
+    this.addField(name);
+    const el = this.data[k];
+    const old = el.get(name);
+    if (old !== v) { retain(v); release(old); el.set(name, v); }
+  }
+  getField(k, name) {
+    if (!this.hasField(name)) throw new MatlabError(`Unrecognized field name "${name}".`, 'MATLAB:nonExistentField');
+    return this.data[k].get(name);
+  }
+  newElement() { return new Map(this.fieldNames.map(f => [f, Mat.empty()])); }
+}
+
+// MException objects are modeled as 1x1 structs (class 'MException') with
+// identifier/message/stack fields, so ME.message etc. just work.
+export function makeMException(identifier, message) {
+  const stack = new StructArray(0, 1, ['file', 'name', 'line']);
+  const me = StructArray.scalar({ identifier: Mat.fromString(identifier || ''), message: Mat.fromString(message || ''), stack });
+  me.classOverride = 'MException';
+  return me;
+}
+
+export function isMException(v) { return v instanceof StructArray && v.classOverride === 'MException'; }
+
+export function valueClassName(v) {
+  if (v instanceof FunctionHandle) return 'function_handle';
+  if (v && typeof v.className === 'function') return v.className();
+  return 'unknown';
+}
+
+// ---------------- serialization (worker <-> page, workspace snapshots) ----------------
+//
+// Converts values to plain, structured-clone-friendly objects and back.
+// Function handles keep their AST and closure; a handle created inside a
+// function file records that file's name so `resolveLocals(name)` can
+// re-attach its local-function table on the other side.
+
+export function serializeValue(v) {
+  if (v instanceof Mat) {
+    return { t: 'm', r: v.rows, c: v.cols, re: v.re, im: v.im, L: v.isLogical, C: v.isChar };
+  }
+  if (v instanceof Cell) return { t: 'c', r: v.rows, c: v.cols, d: v.data.map(serializeValue) };
+  if (v instanceof StructArray) {
+    return {
+      t: 's', r: v.rows, c: v.cols, f: v.fieldNames, cls: v.classOverride,
+      d: v.data.map(el => v.fieldNames.map(n => serializeValue(el.get(n)))),
+    };
+  }
+  if (v instanceof FunctionHandle) {
+    return {
+      t: 'f', name: v.name, params: v.params, body: v.body, source: v.source,
+      closure: v.closure ? [...v.closure.entries()].map(([k, x]) => [k, serializeValue(x)]) : null,
+      localsFile: v.locals && v.locals.fileName ? v.locals.fileName : null,
+    };
+  }
+  throw new Error('serializeValue: unsupported value');
+}
+
+export function deserializeValue(o, resolveLocals = () => null) {
+  switch (o.t) {
+    case 'm': return new Mat(o.r, o.c, o.re, o.im, { isLogical: o.L, isChar: o.C });
+    case 'c': return new Cell(o.r, o.c, o.d.map(x => deserializeValue(x, resolveLocals)));
+    case 's': return new StructArray(o.r, o.c, o.f,
+      o.d.map(vals => new Map(o.f.map((n, i) => [n, deserializeValue(vals[i], resolveLocals)]))), o.cls);
+    case 'f': {
+      const closure = o.closure ? new Map(o.closure.map(([k, x]) => [k, retain(deserializeValue(x, resolveLocals))])) : null;
+      return new FunctionHandle({ name: o.name, params: o.params, body: o.body, source: o.source, closure,
+        locals: o.localsFile ? resolveLocals(o.localsFile) : null });
+    }
+    default: throw new Error('deserializeValue: unknown tag ' + o.t);
   }
 }

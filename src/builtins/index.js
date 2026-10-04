@@ -12,6 +12,8 @@ import { registerPlotting } from './plotting.js';
 import { registerIO } from './io.js';
 import { registerArrayOps } from './arrayops.js';
 import { registerNumeric } from './numeric.js';
+import { registerErrors } from './errors.js';
+import { registerContainers } from './containers.js';
 
 export function buildBuiltinsRegistry() {
   const reg = new Map();
@@ -24,5 +26,7 @@ export function buildBuiltinsRegistry() {
   registerIO(reg);
   registerArrayOps(reg);
   registerNumeric(reg);
+  registerErrors(reg);
+  registerContainers(reg);
   return reg;
 }
