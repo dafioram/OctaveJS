@@ -230,7 +230,7 @@ export function registerSystem(reg) {
   reg.set('disp', {
     fn: (args, _n, ctx) => {
       const a = args[0];
-      ctx.interp.print((a instanceof Mat && a.isChar ? a.toJSString() : formatValue(a)) + '\n');
+      ctx.interp.print((a instanceof Mat && a.isChar ? a.toJSString() : formatValue(a, ctx.interp.displayFormat)) + '\n');
       return [];
     },
   });
@@ -252,6 +252,19 @@ export function registerSystem(reg) {
   reg.set('num2str', {
     fn: (args) => {
       const a = args[0];
+      if (!(a instanceof Mat)) throw new MatlabError('num2str: input must be numeric or char');
+      if (a.isChar) return [a];
+      if (args.length >= 2 && args[1] instanceof Mat && args[1].isChar) {
+        // num2str(A, format): sprintf the format over each row.
+        const fmt = args[1].toJSString();
+        const rows = [];
+        for (let r = 0; r < a.rows; r++) {
+          const vals = [];
+          for (let c = 0; c < a.cols; c++) vals.push(a.re[c * a.rows + r]);
+          rows.push(doSprintf(fmt, vals));
+        }
+        return [Mat.fromString(rows.join('\n'))];
+      }
       if (a.numel === 1) {
         if (args.length >= 2) {
           const p = Math.round(args[1].toScalarNumber());
@@ -278,6 +291,43 @@ export function registerSystem(reg) {
         rows.push(parts.join(' '));
       }
       return [Mat.fromString('[' + rows.join(';') + ']')];
+    },
+  });
+
+  // tic starts a stopwatch (returning its id if asked); toc reports the
+  // seconds since the last tic, or since tic's returned id: toc(id).
+  // Absolute time in ms (not performance.now() alone, which restarts at 0 in
+  // every worker — a tic restored after Stop must still mean the same moment).
+  const now = () => (typeof performance !== 'undefined' && performance.timeOrigin ? performance.timeOrigin + performance.now() : Date.now());
+  reg.set('tic', {
+    fn: (_args, nargout, ctx) => {
+      const t = now();
+      if (nargout >= 1) return [Mat.scalar(t)];
+      ctx.interp.ticTime = t;
+      return [];
+    },
+  });
+  reg.set('toc', {
+    fn: (args, nargout, ctx) => {
+      let start;
+      if (args.length >= 1) start = args[0].toScalarNumber();
+      else if (ctx.interp.ticTime !== undefined) start = ctx.interp.ticTime;
+      else throw new MatlabError('You must call TIC without an output argument before calling TOC without an input argument.');
+      const secs = (now() - start) / 1000;
+      if (nargout >= 1) return [Mat.scalar(secs)];
+      ctx.interp.print(`Elapsed time is ${secs.toFixed(6)} seconds.\n`);
+      return [];
+    },
+  });
+
+  // format long / format short / format (= short). compact/loose are
+  // accepted for compatibility and change nothing.
+  reg.set('format', {
+    fn: (args, _n, ctx) => {
+      const mode = args.length ? args[0].toJSString().toLowerCase() : 'short';
+      if (mode === 'long' || mode === 'short') ctx.interp.displayFormat = mode;
+      else if (mode !== 'compact' && mode !== 'loose') throw new MatlabError(`format: unsupported style '${mode}' (use short or long)`);
+      return [];
     },
   });
 

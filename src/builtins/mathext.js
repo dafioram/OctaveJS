@@ -1,0 +1,475 @@
+// mathext.js — More everyday numeric functions: magic, meshgrid, ndgrid,
+// diff, trapz, cumtrapz, circshift, kron, nnz, sub2ind, ind2sub, mode,
+// factorial, nchoosek, primes, isprime, gcd, lcm, roots, conv, deconv,
+// filter.
+
+import { Mat, Cell, MatlabError } from '../core/values.js';
+import * as C from '../core/cmath.js';
+
+// MATLAB's default dimension: the first one whose size isn't 1.
+function firstDim(m) { return m.rows !== 1 ? 1 : 2; }
+
+function dimArg(v) {
+  const d = Math.round(v.toScalarNumber());
+  if (!(d >= 1)) throw new MatlabError('Dimension argument must be a positive integer');
+  return d;
+}
+
+function requireReal(m, fname) {
+  if (!(m instanceof Mat)) throw new MatlabError(`${fname}: input must be numeric`);
+  if (m.isComplex) throw new MatlabError(`${fname}: complex input is not supported`);
+  return m;
+}
+
+// Calls fn(get, set, len) once per line of `m` along `dim` (each column for
+// dim 1, each row for dim 2), where get(k)/set(k, v) address the line's
+// k-th element in a result of size outRows x outCols (lines keep their
+// position; only the length along `dim` may differ).
+// For dim >= 3 (a singleton dimension of a 2-D array) every element is a
+// line of length 1.
+function forEachLine(m, dim, outLen, fn) {
+  if (dim >= 3) {
+    if (outLen === 0) return Mat.empty();
+    const out = Mat.zeros(m.rows, m.cols);
+    for (let k = 0; k < m.numel; k++) fn(() => m.re[k], (_i, v) => { out.re[k] = v; }, 1);
+    return out;
+  }
+  const outRows = dim === 1 ? outLen : m.rows, outCols = dim === 1 ? m.cols : outLen;
+  const out = Mat.zeros(outRows, outCols);
+  const lines = dim === 1 ? m.cols : m.rows;
+  const len = dim === 1 ? m.rows : m.cols;
+  for (let l = 0; l < lines; l++) {
+    const src = (k) => (dim === 1 ? l * m.rows + k : k * m.rows + l);
+    const dst = (k) => (dim === 1 ? l * outRows + k : k * outRows + l);
+    fn((k) => m.re[src(k)], (k, v) => { out.re[dst(k)] = v; }, len);
+  }
+  return out;
+}
+
+function vectorValues(m) { return Array.from(m.re); }
+function rowOrColumn(likeColumn, values) {
+  const re = Float64Array.from(values);
+  return likeColumn ? new Mat(re.length, 1, re) : new Mat(1, re.length, re);
+}
+
+function magicSquare(n) {
+  const M = Array.from({ length: n }, () => new Array(n).fill(0));
+  if (n % 2 === 1) {
+    for (let i = 1; i <= n; i++) for (let j = 1; j <= n; j++) {
+      const A = ((i + j - (n + 3) / 2) % n + n) % n;
+      const B = ((i + 2 * j - 2) % n + n) % n;
+      M[i - 1][j - 1] = n * A + B + 1;
+    }
+  } else if (n % 4 === 0) {
+    for (let i = 1; i <= n; i++) for (let j = 1; j <= n; j++) {
+      const v = (i - 1) * n + j;
+      const K = Math.trunc((i % 4) / 2) === Math.trunc((j % 4) / 2);
+      M[i - 1][j - 1] = K ? n * n + 1 - v : v;
+    }
+  } else {
+    // Singly even (LUX-style construction, as in MATLAB's magic.m).
+    const p = n / 2;
+    const S = magicSquare(p);
+    for (let i = 0; i < p; i++) for (let j = 0; j < p; j++) {
+      M[i][j] = S[i][j];
+      M[i][j + p] = S[i][j] + 2 * p * p;
+      M[i + p][j] = S[i][j] + 3 * p * p;
+      M[i + p][j + p] = S[i][j] + p * p;
+    }
+    const k = (n - 2) / 4;
+    const cols = [];
+    for (let j = 1; j <= k; j++) cols.push(j);
+    for (let j = n - k + 2; j <= n; j++) cols.push(j);
+    const swap = (r, c) => { const t = M[r - 1][c - 1]; M[r - 1][c - 1] = M[r + p - 1][c - 1]; M[r + p - 1][c - 1] = t; };
+    for (let i = 1; i <= p; i++) for (const c of cols) swap(i, c);
+    const i = k + 1;
+    // MATLAB's M([i; i+p], [1 i]) = M([i+p; i], [1 i]): a repeated column
+    // (when i = 1, for n = 2) is swapped once, not twice.
+    for (const c of new Set([1, i])) swap(i, c);
+  }
+  return M;
+}
+
+function gcd2(a, b) {
+  a = Math.abs(a); b = Math.abs(b);
+  while (b) { [a, b] = [b, a % b]; }
+  return a;
+}
+
+function requireIntegers(m, fname) {
+  for (let k = 0; k < m.numel; k++) {
+    if (!Number.isInteger(m.re[k])) throw new MatlabError(`${fname}: inputs must be integers`);
+  }
+}
+
+export function registerMathExt(reg) {
+  reg.set('magic', {
+    fn: (args) => {
+      const n = Math.round(args[0].toScalarNumber());
+      if (n < 1) return [Mat.empty()];
+      return [Mat.fromRows(magicSquare(n))];
+    },
+  });
+
+  // [X, Y] = meshgrid(x, y): X repeats x across rows, Y repeats y down
+  // columns (size numel(y)-by-numel(x)); ndgrid is the transposed layout.
+  const grid = (transposed) => (args, nargout) => {
+    const x = vectorValues(args[0]);
+    const y = args.length >= 2 ? vectorValues(args[1]) : x;
+    const rows = transposed ? x.length : y.length, cols = transposed ? y.length : x.length;
+    const X = Mat.zeros(rows, cols), Y = Mat.zeros(rows, cols);
+    for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) {
+      X.re[c * rows + r] = transposed ? x[r] : x[c];
+      Y.re[c * rows + r] = transposed ? y[c] : y[r];
+    }
+    return nargout >= 2 ? [X, Y] : [X];
+  };
+  reg.set('meshgrid', { fn: grid(false) });
+  reg.set('ndgrid', { fn: grid(true) });
+
+  reg.set('diff', {
+    fn: (args) => {
+      let m = requireReal(args[0], 'diff');
+      const order = args.length >= 2 && !args[1].isEmpty ? Math.round(args[1].toScalarNumber()) : 1;
+      const dim = args.length >= 3 ? dimArg(args[2]) : firstDim(m);
+      for (let pass = 0; pass < order; pass++) {
+        const len = dim === 1 ? m.rows : dim === 2 ? m.cols : 1;
+        m = forEachLine(m, dim, Math.max(len - 1, 0), (get, set, n) => {
+          for (let k = 0; k + 1 < n; k++) set(k, get(k + 1) - get(k));
+        });
+      }
+      return [m];
+    },
+  });
+
+  // trapz(Y), trapz(X, Y), trapz(Y, dim), trapz(X, Y, dim); cumtrapz likewise.
+  function trapzArgs(args) {
+    let x = null, y, dim = null;
+    if (args.length >= 3) { [x, y] = args; dim = dimArg(args[2]); }
+    else if (args.length === 2 && args[1].isScalar && !args[0].isScalar) { y = args[0]; dim = dimArg(args[1]); }
+    else if (args.length === 2) { [x, y] = args; }
+    else { y = args[0]; }
+    requireReal(y, 'trapz');
+    dim = dim || firstDim(y);
+    const len = dim === 1 ? y.rows : dim === 2 ? y.cols : 1;
+    let spacing;
+    if (!x) spacing = (k) => 1;
+    else if (x.isScalar) { const h = x.re[0]; spacing = () => h; }
+    else {
+      if (x.numel !== len) throw new MatlabError('trapz: length of X must match the size of Y along the integration dimension');
+      spacing = (k) => x.re[k + 1] - x.re[k];
+    }
+    return { y, dim, len, spacing };
+  }
+  reg.set('trapz', {
+    fn: (args) => {
+      const { y, dim, spacing } = trapzArgs(args);
+      return [forEachLine(y, dim, 1, (get, set, n) => {
+        let s = 0;
+        for (let k = 0; k + 1 < n; k++) s += spacing(k) * (get(k) + get(k + 1)) / 2;
+        set(0, s);
+      })];
+    },
+  });
+  reg.set('cumtrapz', {
+    fn: (args) => {
+      const { y, dim, len, spacing } = trapzArgs(args);
+      return [forEachLine(y, dim, dim >= 3 ? 1 : len, (get, set, n) => {
+        let s = 0;
+        if (n > 0) set(0, 0);
+        for (let k = 0; k + 1 < n; k++) { s += spacing(k) * (get(k) + get(k + 1)) / 2; set(k + 1, s); }
+      })];
+    },
+  });
+
+  // circshift(A, k): shift along the first non-singleton dimension;
+  // circshift(A, [r c]) shifts rows by r and columns by c;
+  // circshift(A, k, dim) shifts along dim.
+  reg.set('circshift', {
+    fn: (args) => {
+      const a = args[0];
+      let dr = 0, dc = 0;
+      const k = args[1];
+      if (args.length >= 3) {
+        const d = dimArg(args[2]);
+        if (d === 1) dr = Math.round(k.toScalarNumber()); else if (d === 2) dc = Math.round(k.toScalarNumber());
+      } else if (k.numel >= 2) { dr = Math.round(k.re[0]); dc = Math.round(k.re[1]); }
+      else if (firstDim(a) === 1) dr = Math.round(k.toScalarNumber());
+      else dc = Math.round(k.toScalarNumber());
+      const R = a.rows, Cc = a.cols;
+      const srcIndex = (r, c) => {
+        const sr = R ? (((r - dr) % R) + R) % R : 0;
+        const sc = Cc ? (((c - dc) % Cc) + Cc) % Cc : 0;
+        return sc * R + sr;
+      };
+      if (a instanceof Cell) {
+        const data = new Array(a.numel);
+        for (let c = 0; c < Cc; c++) for (let r = 0; r < R; r++) data[c * R + r] = a.data[srcIndex(r, c)];
+        return [new Cell(R, Cc, data)];
+      }
+      if (!(a instanceof Mat)) throw new MatlabError('circshift: unsupported input type');
+      const out = new Mat(R, Cc, new Float64Array(a.numel), a.im ? new Float64Array(a.numel) : null, { isChar: a.isChar, isLogical: a.isLogical });
+      for (let c = 0; c < Cc; c++) for (let r = 0; r < R; r++) {
+        const s = srcIndex(r, c);
+        out.re[c * R + r] = a.re[s];
+        if (out.im) out.im[c * R + r] = a.im[s];
+      }
+      return [out];
+    },
+  });
+
+  reg.set('kron', {
+    fn: (args) => {
+      const [a, b] = args;
+      const rows = a.rows * b.rows, cols = a.cols * b.cols;
+      const out = Mat.zeros(rows, cols);
+      const cx = a.isComplex || b.isComplex;
+      if (cx) out.im = new Float64Array(rows * cols);
+      for (let j = 0; j < a.cols; j++) for (let i = 0; i < a.rows; i++) {
+        const ar = a.re[j * a.rows + i], ai = a.isComplex ? a.im[j * a.rows + i] : 0;
+        for (let l = 0; l < b.cols; l++) for (let k = 0; k < b.rows; k++) {
+          const br = b.re[l * b.rows + k], bi = b.isComplex ? b.im[l * b.rows + k] : 0;
+          const dst = (j * b.cols + l) * rows + i * b.rows + k;
+          const [vr, vi] = C.cmul(ar, ai, br, bi);
+          out.re[dst] = vr;
+          if (cx) out.im[dst] = vi;
+        }
+      }
+      return [out];
+    },
+  });
+
+  reg.set('nnz', {
+    fn: (args) => {
+      const a = args[0];
+      let n = 0;
+      for (let k = 0; k < a.numel; k++) if (a.re[k] !== 0 || (a.isComplex && a.im[k] !== 0)) n++;
+      return [Mat.scalar(n)];
+    },
+  });
+
+  function sizePair(sz) {
+    if (sz.numel < 2) throw new MatlabError('Size vector must have at least two elements');
+    return [Math.round(sz.re[0]), Math.round(sz.re[1])];
+  }
+  reg.set('sub2ind', {
+    fn: (args) => {
+      const [m, n] = sizePair(args[0]);
+      const r = args[1], c = args.length >= 3 ? args[2] : Mat.scalar(1);
+      if (r.numel !== c.numel && c.numel !== 1) throw new MatlabError('sub2ind: subscript arrays must be the same size');
+      const out = Mat.zeros(r.rows, r.cols);
+      for (let k = 0; k < r.numel; k++) {
+        const ri = r.re[k], ci = c.re[c.numel === 1 ? 0 : k];
+        if (!Number.isInteger(ri) || !Number.isInteger(ci) || ri < 1 || ci < 1 || ri > m || ci > n) throw new MatlabError('Out of range subscript.');
+        out.re[k] = (ci - 1) * m + ri;
+      }
+      return [out];
+    },
+  });
+  reg.set('ind2sub', {
+    fn: (args, nargout) => {
+      const [m, n] = sizePair(args[0]);
+      const ind = args[1];
+      if (nargout <= 1) return [ind];
+      const r = Mat.zeros(ind.rows, ind.cols), c = Mat.zeros(ind.rows, ind.cols);
+      for (let k = 0; k < ind.numel; k++) {
+        const v = ind.re[k];
+        if (!Number.isInteger(v) || v < 1 || v > m * n) throw new MatlabError('Index out of range.');
+        r.re[k] = ((v - 1) % m) + 1;
+        c.re[k] = Math.floor((v - 1) / m) + 1;
+      }
+      return [r, c];
+    },
+  });
+
+  // [M, F] = mode(X, dim): most frequent value (smallest on ties), NaNs ignored.
+  reg.set('mode', {
+    fn: (args, nargout) => {
+      const a = requireReal(args[0], 'mode');
+      if (a.isEmpty) return nargout >= 2 ? [Mat.scalar(NaN), Mat.scalar(0)] : [Mat.scalar(NaN)];
+      const dim = args.length >= 2 ? dimArg(args[1]) : firstDim(a);
+      const freq = [];
+      const M = forEachLine(a, dim, 1, (get, set, n) => {
+        const counts = new Map();
+        for (let k = 0; k < n; k++) { const v = get(k); if (!Number.isNaN(v)) counts.set(v, (counts.get(v) || 0) + 1); }
+        let best = NaN, bestCount = 0;
+        for (const [v, cnt] of counts) if (cnt > bestCount || (cnt === bestCount && v < best)) { best = v; bestCount = cnt; }
+        set(0, best);
+        freq.push(bestCount);
+      });
+      return nargout >= 2 ? [M, new Mat(M.rows, M.cols, Float64Array.from(freq))] : [M];
+    },
+  });
+
+  reg.set('factorial', {
+    fn: (args) => {
+      const a = requireReal(args[0], 'factorial');
+      return [Mat.mapElementwise(a, (x) => {
+        if (!Number.isInteger(x) || x < 0) throw new MatlabError('N must be a matrix of non-negative integers.');
+        if (x > 170) return [Infinity, 0];
+        let f = 1;
+        for (let k = 2; k <= x; k++) f *= k;
+        return [f, 0];
+      })];
+    },
+  });
+
+  // nchoosek(n, k): binomial coefficient; nchoosek(v, k): all k-element
+  // combinations of the vector v, one per row.
+  reg.set('nchoosek', {
+    fn: (args) => {
+      const v = requireReal(args[0], 'nchoosek');
+      const k = Math.round(args[1].toScalarNumber());
+      if (v.isScalar) {
+        const n = v.re[0];
+        if (!Number.isInteger(n) || n < 0 || k < 0 || k > n) throw new MatlabError('nchoosek: N and K must be non-negative integers with K <= N');
+        let r = 1;
+        for (let i = 1; i <= Math.min(k, n - k); i++) r = r * (n - Math.min(k, n - k) + i) / i;
+        return [Mat.scalar(Math.round(r))];
+      }
+      const vals = vectorValues(v);
+      const combos = [];
+      const pick = [];
+      const rec = (start) => {
+        if (pick.length === k) { combos.push(pick.map(i => vals[i])); return; }
+        for (let i = start; i < vals.length; i++) { pick.push(i); rec(i + 1); pick.pop(); }
+      };
+      if (k >= 0 && k <= vals.length) rec(0);
+      if (combos.length === 0) return [Mat.zeros(0, Math.max(k, 0))];
+      return [Mat.fromRows(combos)];
+    },
+  });
+
+  reg.set('primes', {
+    fn: (args) => {
+      const n = Math.floor(args[0].toScalarNumber());
+      if (n < 2) return [Mat.zeros(1, 0)];
+      const sieve = new Uint8Array(n + 1);
+      const out = [];
+      for (let i = 2; i <= n; i++) {
+        if (sieve[i]) continue;
+        out.push(i);
+        for (let j = i * i; j <= n; j += i) sieve[j] = 1;
+      }
+      return [rowOrColumn(false, out)];
+    },
+  });
+  reg.set('isprime', {
+    fn: (args) => {
+      const a = requireReal(args[0], 'isprime');
+      const out = Mat.mapElementwise(a, (x) => {
+        if (!Number.isInteger(x) || x < 0) throw new MatlabError('isprime: all entries must be non-negative integers');
+        if (x < 2) return [0, 0];
+        if (x % 2 === 0) return [x === 2 ? 1 : 0, 0];
+        for (let d = 3; d * d <= x; d += 2) if (x % d === 0) return [0, 0];
+        return [1, 0];
+      });
+      out.isLogical = true;
+      return [out];
+    },
+  });
+
+  reg.set('gcd', {
+    fn: (args) => {
+      requireIntegers(args[0], 'gcd'); requireIntegers(args[1], 'gcd');
+      return [Mat.broadcastBinary(args[0], args[1], (a, _ai, b) => [gcd2(a, b), 0])];
+    },
+  });
+  reg.set('lcm', {
+    fn: (args) => {
+      requireIntegers(args[0], 'lcm'); requireIntegers(args[1], 'lcm');
+      return [Mat.broadcastBinary(args[0], args[1], (a, _ai, b) => {
+        if (a === 0 || b === 0) return [0, 0];
+        return [Math.abs(a * b) / gcd2(a, b), 0];
+      })];
+    },
+  });
+
+  // roots(p): eigenvalues of the companion matrix, as MATLAB does.
+  reg.set('roots', {
+    fn: (args, _n, ctx) => {
+      const p = requireReal(args[0], 'roots');
+      let c = vectorValues(p);
+      while (c.length && c[0] === 0) c.shift();
+      let zeros = 0;
+      while (c.length && c[c.length - 1] === 0) { c.pop(); zeros++; }
+      const n = c.length - 1;
+      const extra = Array(zeros).fill(0);
+      if (n < 1) return [rowOrColumn(true, extra)];
+      const comp = Mat.zeros(n, n);
+      for (let j = 0; j < n; j++) comp.re[j * n] = -c[j + 1] / c[0];
+      for (let i = 1; i < n; i++) comp.re[(i - 1) * n + i] = 1;
+      const [ev] = ctx.interp.builtins.get('eig').fn([comp], 1, ctx);
+      if (zeros === 0) return [ev];
+      const re = Float64Array.from([...ev.re, ...extra]);
+      const im = ev.im ? Float64Array.from([...ev.im, ...extra]) : null;
+      return [new Mat(re.length, 1, re, im)];
+    },
+  });
+
+  // conv(u, v, shape) with shape 'full' (default), 'same' or 'valid'.
+  reg.set('conv', {
+    fn: (args) => {
+      const [u, v] = args;
+      const shape = args.length >= 3 ? args[2].toJSString().toLowerCase() : 'full';
+      const m = u.numel, n = v.numel;
+      const full = m === 0 || n === 0 ? 0 : m + n - 1;
+      const re = new Float64Array(full), im = (u.isComplex || v.isComplex) ? new Float64Array(full) : null;
+      for (let i = 0; i < m; i++) for (let j = 0; j < n; j++) {
+        const [pr, pi] = C.cmul(u.re[i], u.isComplex ? u.im[i] : 0, v.re[j], v.isComplex ? v.im[j] : 0);
+        re[i + j] += pr;
+        if (im) im[i + j] += pi;
+      }
+      let start = 0, len = full;
+      if (shape === 'same') { start = Math.floor(n / 2); len = m; }
+      else if (shape === 'valid') { start = n - 1; len = Math.max(m - n + 1, 0); }
+      else if (shape !== 'full') throw new MatlabError("conv: shape must be 'full', 'same' or 'valid'");
+      const pr = re.slice(start, start + len), pi = im ? im.slice(start, start + len) : null;
+      const column = u.cols === 1 && u.rows > 1 || (u.numel === 1 && v.cols === 1 && v.rows > 1);
+      return [new Mat(column ? pr.length : 1, column ? 1 : pr.length, pr, pi)];
+    },
+  });
+
+  // [q, r] = deconv(y, a): polynomial division, y = conv(a, q) + r.
+  reg.set('deconv', {
+    fn: (args, nargout) => {
+      const y = vectorValues(requireReal(args[0], 'deconv')), a = vectorValues(requireReal(args[1], 'deconv'));
+      if (!a.length || a[0] === 0) throw new MatlabError('deconv: first coefficient of the divisor must be nonzero');
+      const nq = y.length - a.length + 1;
+      if (nq < 1) return nargout >= 2 ? [Mat.scalar(0), rowOrColumn(args[0].cols === 1 && args[0].rows > 1, y)] : [Mat.scalar(0)];
+      const r = y.slice(), q = new Array(nq).fill(0);
+      for (let i = 0; i < nq; i++) {
+        q[i] = r[i] / a[0];
+        for (let j = 0; j < a.length; j++) r[i + j] -= q[i] * a[j];
+      }
+      for (let i = 0; i < nq; i++) r[i] = 0;
+      const col = args[0].cols === 1 && args[0].rows > 1;
+      return nargout >= 2 ? [rowOrColumn(col, q), rowOrColumn(col, r)] : [rowOrColumn(col, q)];
+    },
+  });
+
+  // y = filter(b, a, x): rational transfer function b(z)/a(z) applied to x
+  // (along the first non-singleton dimension, or dim).
+  reg.set('filter', {
+    fn: (args) => {
+      const b = vectorValues(requireReal(args[0], 'filter')), a = vectorValues(requireReal(args[1], 'filter'));
+      const x = requireReal(args[2], 'filter');
+      if (args.length >= 4 && !args[3].isEmpty) throw new MatlabError('filter: initial conditions are not supported');
+      const dim = args.length >= 5 ? dimArg(args[4]) : firstDim(x);
+      if (!a.length || a[0] === 0) throw new MatlabError('filter: first denominator coefficient must be nonzero');
+      const a0 = a[0];
+      const bn = b.map(v => v / a0), an = a.map(v => v / a0);
+      const len = dim === 1 ? x.rows : dim === 2 ? x.cols : 1;
+      return [forEachLine(x, dim, len, (get, set, n) => {
+        const y = new Float64Array(n);
+        for (let i = 0; i < n; i++) {
+          let s = 0;
+          for (let k = 0; k < bn.length && k <= i; k++) s += bn[k] * get(i - k);
+          for (let k = 1; k < an.length && k <= i; k++) s -= an[k] * y[i - k];
+          y[i] = s;
+          set(i, s);
+        }
+      })];
+    },
+  });
+}

@@ -41,6 +41,12 @@ const BUILTIN_HINTS = new Set([
   'struct', 'fieldnames', 'isfield', 'rmfield', 'isstruct', 'getfield', 'setfield',
   'struct2cell', 'numfields', 'error', 'warning', 'assert', 'MException', 'throw',
   'rethrow', 'getReport', 'varargin', 'varargout',
+  'tic', 'toc', 'format', 'isequal', 'isequaln', 'ismember', 'xor', 'not', 'and', 'or',
+  'plus', 'minus', 'times', 'rdivide', 'ldivide', 'mtimes', 'mrdivide', 'mldivide', 'mpower',
+  'eq', 'ne', 'lt', 'gt', 'le', 'ge', 'uminus', 'uplus', 'bsxfun', 'magic', 'meshgrid', 'ndgrid',
+  'diff', 'trapz', 'cumtrapz', 'circshift', 'kron', 'nnz', 'sub2ind', 'ind2sub', 'mode',
+  'factorial', 'nchoosek', 'primes', 'isprime', 'gcd', 'lcm', 'roots', 'conv', 'deconv', 'filter',
+  'strcat', 'strfind', 'contains', 'startsWith', 'endsWith', 'regexp', 'regexpi', 'regexprep', 'int2str',
 ]);
 
 function endsValue(prev) {

@@ -171,33 +171,42 @@ export class Mat {
     return new Mat(a.rows, a.cols, re, im);
   }
 
-  // Elementwise binary op with MATLAB-style broadcasting: same size, or
-  // either operand is scalar.
+  // Elementwise binary op with MATLAB's implicit expansion: in each
+  // dimension the sizes must match or one of them must be 1, which is then
+  // repeated (so a 3x3 minus a 1x3 subtracts the row from every row).
   static broadcastBinary(a, b, fn) {
-    const aScalar = a.numel === 1, bScalar = b.numel === 1;
-    let rows, cols;
-    if (aScalar && bScalar) { rows = 1; cols = 1; }
-    else if (aScalar) { rows = b.rows; cols = b.cols; }
-    else if (bScalar) { rows = a.rows; cols = a.cols; }
-    else {
-      if (a.rows !== b.rows || a.cols !== b.cols) {
-        throw new MatlabError(`Matrix dimensions must agree (got ${a.sizeStr()} and ${b.sizeStr()})`);
-      }
-      rows = a.rows; cols = a.cols;
+    const rows = expandDim(a.rows, b.rows), cols = expandDim(a.cols, b.cols);
+    if (rows < 0 || cols < 0) {
+      throw new MatlabError(`Arrays have incompatible sizes for this operation (${a.sizeStr()} and ${b.sizeStr()})`, 'MATLAB:sizeDimensionsMustMatch');
     }
     const n = rows * cols;
     const re = new Float64Array(n);
     let im = null;
-    for (let k = 0; k < n; k++) {
-      const ak = aScalar ? 0 : k, bk = bScalar ? 0 : k;
-      const ar = a.re[ak], ai = a.isComplex ? a.im[ak] : 0;
-      const br = b.re[bk], bi = b.isComplex ? b.im[bk] : 0;
-      const [r, i] = fn(ar, ai, br, bi);
-      re[k] = r;
-      if (i !== 0) { if (!im) im = new Float64Array(n); im[k] = i; }
+    const aSame = a.rows === rows && a.cols === cols, bSame = b.rows === rows && b.cols === cols;
+    const aRowStep = a.rows === 1 ? 0 : 1, aColStep = a.cols === 1 ? 0 : a.rows;
+    const bRowStep = b.rows === 1 ? 0 : 1, bColStep = b.cols === 1 ? 0 : b.rows;
+    let k = 0;
+    for (let c = 0; c < cols; c++) {
+      for (let r = 0; r < rows; r++, k++) {
+        const ak = aSame ? k : r * aRowStep + c * aColStep;
+        const bk = bSame ? k : r * bRowStep + c * bColStep;
+        const ar = a.re[ak], ai = a.isComplex ? a.im[ak] : 0;
+        const br = b.re[bk], bi = b.isComplex ? b.im[bk] : 0;
+        const [vr, vi] = fn(ar, ai, br, bi);
+        re[k] = vr;
+        if (vi !== 0) { if (!im) im = new Float64Array(n); im[k] = vi; }
+      }
     }
     return new Mat(rows, cols, re, im);
   }
+}
+
+// Size of one dimension under implicit expansion, or -1 if incompatible.
+function expandDim(x, y) {
+  if (x === y) return x;
+  if (x === 1) return y;
+  if (y === 1) return x;
+  return -1;
 }
 
 // The values of the colon operator a:step:b. Computed as a + k*step

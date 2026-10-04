@@ -67,7 +67,7 @@ function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<':
 
 const mirror = {
   vars: new Map(), globalNames: [], globals: [], persistents: [], funcTable: [],
-  figureState: { current: 1, hold: false }, figures: new Map(),
+  figureState: { current: 1, hold: false }, figures: new Map(), settings: null,
 };
 
 function applyDelta(d) {
@@ -79,6 +79,7 @@ function applyDelta(d) {
   if (d.persistents) mirror.persistents = d.persistents;
   if (d.funcTable) mirror.funcTable = d.funcTable;
   if (d.figureState) mirror.figureState = d.figureState;
+  if (d.settings) mirror.settings = d.settings;
 }
 
 function initMessage() {
@@ -88,7 +89,7 @@ function initMessage() {
     snapshot: {
       vars: [...mirror.vars.entries()], globalNames: mirror.globalNames, globals: mirror.globals,
       persistents: mirror.persistents, funcTable: mirror.funcTable, figureState: mirror.figureState,
-      figures: [...mirror.figures.entries()],
+      figures: [...mirror.figures.entries()], settings: mirror.settings,
     },
   };
 }
@@ -815,14 +816,15 @@ function showHelpModal() {
     <button class="modal-close" data-action="close-modal">&times;</button>
     <h2>Supported functions &amp; key limitations</h2>
     <p><strong>Language:</strong> variables, matrices/vectors, complex numbers, cell arrays (<code>{...}</code>, <code>c{i}</code>, <code>c{:}</code>), structs (<code>s.a.b = 1</code>, struct arrays, <code>s.(name)</code>), if/for/while/switch, try/catch, functions (multiple outputs, <code>varargin</code>/<code>varargout</code>, anonymous functions, recursion), function files, global/persistent, logical &amp; numeric indexing, auto-growing arrays, deletion via <code>[]</code>.</p>
-    <p><strong>Math:</strong> trig/exp/log family, sum/mean/std/var/min/max/median, sort/unique/find/any/all, isnan/isinf/isfinite, fliplr/flipud/flip/repmat/cat, size/reshape/diag/triu/tril, det/trace/rank/norm/dot/cross/inv/pinv/eig/svd/lu/qr, fft/ifft, polyfit/polyval/interp1.</p>
+    <p><strong>Math:</strong> operators expand implicitly (<code>A - mean(A)</code>); trig/exp/log family, sum/mean/std/var/min/max/median/mode (with <code>'all'</code>, <code>'omitnan'</code>), sort/unique/find/any/all, isnan/isinf/isfinite, fliplr/flipud/flip/repmat/cat/circshift, size/reshape/diag/triu/tril, det/trace/rank/norm/dot/cross/inv/pinv/eig/svd/lu/qr/kron, fft/ifft, polyfit/polyval/roots/conv/deconv/filter/interp1, magic/meshgrid/diff/trapz/cumtrapz, factorial/nchoosek/primes/isprime/gcd/lcm, isequal/ismember, operator functions (plus, times, …).</p>
     <p><strong>Cells &amp; structs:</strong> cell, cellfun, arrayfun, num2cell, cell2mat, cellstr, iscell, iscellstr, struct, fieldnames, isfield, rmfield, isstruct, getfield, setfield, struct2cell.</p>
     <p><strong>Errors:</strong> error, warning, assert, MException, throw/rethrow, getReport.</p>
-    <p><strong>Strings:</strong> strcmp/strcmpi, upper/lower, strtrim, strrep, strsplit, strjoin, str2double, str2num, sprintf, num2str.</p>
+    <p><strong>Strings:</strong> strcmp/strcmpi, upper/lower, strtrim, strrep, strsplit, strjoin, strcat, strfind, contains/startsWith/endsWith, regexp/regexpi/regexprep, str2double, str2num, sprintf, num2str, int2str.</p>
+    <p><strong>Timing &amp; display:</strong> tic/toc, <code>format long</code> / <code>format short</code>.</p>
     <p><strong>Plotting:</strong> plot, scatter, bar, histogram, hist, figure, hold, xlabel/ylabel/title, legend, grid, xlim/ylim, axis.</p>
     <p><strong>Files:</strong> scripts and data live in the <em>Files</em> sidebar tab and are saved in this browser. Drag files onto the page to add them. <code>save</code>/<code>writematrix</code> write there too; use the &#x2913; button to download a file.</p>
     <p><strong>Console:</strong> commands run in the background — press <em>Stop</em> (or Ctrl+C in the command line) to interrupt one; the workspace returns to its state before that command. <code>clc</code> clears the window, <code>help('name')</code> shows syntax.</p>
-    <p><strong>Not supported:</strong> string arrays (double-quoted), N-D arrays, integer classes, classdef. Command syntax (bareword args) works for <code>clear</code>, <code>hold</code>, <code>grid</code>, <code>axis</code>, <code>disp</code> only. Full list in the README.</p>
+    <p><strong>Not supported:</strong> string arrays (double-quoted), N-D arrays, integer classes, classdef. Command syntax (bareword args) works for <code>clear</code>, <code>hold</code>, <code>grid</code>, <code>axis</code>, <code>disp</code>, <code>format</code> only. Full list in the README.</p>
   `;
   openModal();
 }

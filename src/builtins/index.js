@@ -14,6 +14,9 @@ import { registerArrayOps } from './arrayops.js';
 import { registerNumeric } from './numeric.js';
 import { registerErrors } from './errors.js';
 import { registerContainers } from './containers.js';
+import { registerLogic } from './logic.js';
+import { registerMathExt } from './mathext.js';
+import { registerStrings } from './strings.js';
 
 export function buildBuiltinsRegistry() {
   const reg = new Map();
@@ -28,5 +31,8 @@ export function buildBuiltinsRegistry() {
   registerNumeric(reg);
   registerErrors(reg);
   registerContainers(reg);
+  registerLogic(reg);
+  registerMathExt(reg);
+  registerStrings(reg);
   return reg;
 }
