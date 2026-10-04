@@ -48,7 +48,7 @@ than a marketing description.
   esbuild to bundle `src/ui/main.js` and everything it imports —
   math.js, Plotly, Papa Parse, CodeMirror 6 — into `dist/main.js`, with
   `dist/index.html` and `dist/styles.css` copied alongside it).
-- **Running the interpreter's own test suite:** `npm test` (about 320
+- **Running the interpreter's own test suite:** `npm test` (about 420
   assertions covering the language core, builtins, cells/structs,
   try/catch, copy-on-write semantics, the worker protocol, plotting, file
   I/O, the MAT5 codec, and MATLAB-compatibility regressions; see `test/`).
@@ -64,7 +64,9 @@ functions with multiple return values (`[a,b] = f(...)`), `nargin`/
 correctly capturing free variables *by value* at creation time, matching
 real MATLAB); function handles to named functions (`@sin`); `global` and
 `persistent`; the full operator set including matrix vs. elementwise
-operators (`*` vs `.*`, `^` vs `.^`, etc.), ranges (`a:b`, `a:step:b`),
+operators (`*` vs `.*`, `^` vs `.^`, etc.) with implicit expansion
+(`A - mean(A)` subtracts a row from every row; sizes must match or be 1
+in each dimension), ranges (`a:b`, `a:step:b`),
 transpose (`'`, `.'`); both logical and numeric indexing (with the correct
 different semantics for each); linear and 2-D indexing including `end`;
 auto-growing arrays on assignment; element/row/column deletion via
@@ -80,21 +82,43 @@ loop) updates it in place instead of copying it every time.
 
 **Math:** the trig/exp/log/rounding family (auto-promoting to complex
 where real MATLAB does, e.g. `sqrt(-1)`, `asin(2)`); `sum`, `prod`, `mean`,
-`median`, `std`, `var`, `min`/`max` (with index output), `cumsum`,
-`cumprod`; `sort` (with index output, `'ascend'`/`'descend'`), `unique`,
+`median`, `std`, `var`, `min`/`max` (with index output), `range`, `mode`,
+`cumsum`, `cumprod` — all with a dimension argument and, where MATLAB has
+them, the `'all'` and `'omitnan'`/`'includenan'` options; `sort` (with index output, `'ascend'`/`'descend'`), `unique`,
 `find` (linear or `[row,col]`/`[row,col,val]` forms, with optional count
 and `'first'`/`'last'`), `any`, `all`, `isnan`, `isinf`, `isfinite`;
 `fliplr`, `flipud`, `flip`, `repmat`, `cat`/`horzcat`/`vertcat`; `size`,
 `length`, `numel`, `reshape`, `diag`, `triu`, `tril`, `det`, `trace`,
-`rank`, `norm`, `dot`, `cross`, `inv`, `pinv`, `eig`, `svd`, `lu`, `qr`;
-`fft`/`ifft`; `polyfit`, `polyval`, `interp1` (linear interpolation).
+`rank`, `norm`, `dot`, `cross`, `inv`, `pinv`, `eig`, `svd`, `lu`, `qr`,
+`kron`, `nnz`; `fft`/`ifft` (vectors or matrix columns, with length and
+dimension arguments); `polyfit`, `polyval`, `roots`, `conv`, `deconv`,
+`filter`, `interp1` (linear interpolation); `magic`, `meshgrid`, `ndgrid`,
+`diff`, `trapz`, `cumtrapz`, `circshift`, `sub2ind`/`ind2sub`;
+`factorial`, `nchoosek` (count or combinations), `primes`, `isprime`,
+`gcd`, `lcm`.
+
+**Comparison & operators as functions:** `isequal`, `isequaln`,
+`ismember` (numbers or cell arrays of strings, with the location output),
+`xor`, `not`, `and`, `or`, and `plus`, `minus`, `times`, `rdivide`,
+`ldivide`, `mtimes`, `mrdivide`, `mldivide`, `mpower`, `eq`, `ne`, `lt`,
+`gt`, `le`, `ge`, `uminus`, `uplus` (so `cellfun(@plus, a, b)` works);
+`bsxfun`.
 
 **Strings:** `strcmp`, `strcmpi` (both also compare element-wise against
 a cell array of strings), `upper`, `lower`, `strtrim`, `strrep`,
-`strsplit`, `strjoin`, `str2double`, `str2num` (evaluates the string as a
-MATLAB expression through this same interpreter — no different in kind
-from any other code you run here); `sort` and `unique` accept cell arrays
-of strings.
+`strsplit`, `strjoin`, `strcat`, `strfind`, `contains`, `startsWith`,
+`endsWith`, `regexp`/`regexpi` (all seven outputs — `'match'`,
+`'tokens'`, `'names'`, `'split'`, … — and `'once'`), `regexprep`,
+`num2str` (including a format argument), `int2str`, `str2double`,
+`str2num` (evaluates the string as a MATLAB expression through this same
+interpreter — no different in kind from any other code you run here);
+`sort` and `unique` accept cell arrays of strings. Regular expressions
+run on JavaScript's engine, which agrees with MATLAB on the common syntax
+(classes, quantifiers, groups, lookaround, `(?<name>...)`); MATLAB's `\<`
+and `\>` word anchors are translated.
+
+**Timing & display:** `tic`/`toc` (including `t = tic; toc(t)`), `format
+long`/`format short`.
 
 **Cells & structs:** `cell`, `iscell`, `iscellstr`, `cellfun` and
 `arrayfun` (including `'UniformOutput', false` and multiple outputs),
@@ -134,12 +158,11 @@ there's a reasonable workaround, it's listed.
 | Not supported | Use instead |
 |---|---|
 | Double-quoted strings (`"hello"`, MATLAB string arrays) | Single-quoted char arrays: `'hello'` |
-| **General command syntax** for arbitrary/user-defined functions, e.g. calling your own `function foo(s)` as `foo bar` | Use the normal parenthesized form: `foo('bar')`. A small, fixed whitelist — `clear`, `hold`, `grid`, `axis`, `disp` — *does* support command syntax (`clear x y`, `hold on`, `grid off`, `axis equal`, `disp hello`), since those are idiomatic and unambiguous enough to special-case safely; see the note below the table. |
+| **General command syntax** for arbitrary/user-defined functions, e.g. calling your own `function foo(s)` as `foo bar` | Use the normal parenthesized form: `foo('bar')`. A small, fixed whitelist — `clear`, `hold`, `grid`, `axis`, `disp`, `format` — *does* support command syntax (`clear x y`, `hold on`, `grid off`, `axis equal`, `disp hello`, `format long`), since those are idiomatic and unambiguous enough to special-case safely; see the note below the table. |
 | N-D arrays (more than 2 subscripts) | Reshape/index a 2-D matrix, or use multiple 2-D matrices |
 | Integer classes (`int8`, `uint16`, ...) — everything is `double` (or tagged `logical`/`char`) | Just use `double`; a trailing class-name argument to `zeros`/`ones` (e.g. `zeros(3,'int8')`) is silently ignored |
 | `()` followed by more indexing in an assignment, e.g. `x(2)(3) = 1` (MATLAB rejects this too; `s(2).f = 1` and `c{2}(3) = 1` *are* supported) | Use an intermediate variable |
 | Name-Value pairs to `plot`, e.g. `plot(x,y,'LineWidth',2)` | Inline linespec strings only, e.g. `plot(x,y,'r--')` |
-| Matrix/columnwise FFT | `fft`/`ifft` only accept vector input |
 | Complex-matrix `rank`/`svd` | `rank(real(A))` as an approximation, or avoid complex inputs |
 | Saving cell arrays or structs to `.mat` | They're skipped with a note; save their numeric contents as separate variables |
 | `classdef` classes, `containers.Map`, tables | Structs and cell arrays |
@@ -151,8 +174,8 @@ which makes MATLAB's grammar depend on runtime state, not just the text
 being parsed. This app keeps parsing a pure, one-time, stateless step
 (the parser never sees the interpreter's variables), so replicating that
 general rule isn't a good fit architecturally. Instead, `clear`, `hold`,
-`grid`, `axis`, and `disp` are recognized by name directly in the parser:
-when one of those five words is immediately followed by a bareword on the
+`grid`, `axis`, `disp` and `format` are recognized by name directly in
+the parser: when one of those words is immediately followed by a bareword on the
 same line, it's rewritten to the equivalent parenthesized call before
 anything else happens — so `hold on` and `hold('on')` produce the exact
 same result. This covers the cases people actually reach for command
@@ -231,8 +254,8 @@ src/core/       lexer.js, parser.js, values.js, cmath.js, interpreter.js
                 — the language itself, no DOM/UI dependency.
 src/builtins/   elementwise.js, reduction.js, linalg.js, fft.js,
                 system.js, plotting.js, io.js, containers.js, errors.js,
-                index.js — the function library, registered into the
-                interpreter.
+                logic.js, mathext.js, strings.js, index.js — the
+                function library, registered into the interpreter.
 src/mat5/       mat5.js — the MAT5 binary codec.
 src/worker/     session.js — the interpreter side of the page <-> worker
                 message protocol (no DOM, tested under Node);
@@ -242,7 +265,7 @@ src/ui/         main.js, backend.js, vfs.js, matlab-lang.js, styles.css
                   fallback) backend, the IndexedDB file store, CodeMirror
                   setup, Plotly glue. Everything here is what actually
                   needs a browser; everything above it is plain, testable JS.
-test/           harness.js + five test files — run with `npm test`.
+test/           harness.js + six test files — run with `npm test`.
 build.mjs       esbuild bundling script -> dist/ (main.js and worker.js).
 ```
 

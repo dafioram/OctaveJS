@@ -12,8 +12,10 @@
 - `src/worker/` (the interpreter session behind the Web Worker) must also
   stay DOM-free; `test/run_tests5.mjs` drives its message protocol.
 - New MATLAB-compatibility fixes get a regression test in
-  `test/run_tests4.mjs`; tests for new language features go in
-  `test/run_tests5.mjs` (or a new test file wired into `npm test`).
+  `test/run_tests4.mjs`; tests for language features go in
+  `test/run_tests5.mjs` and for library functions in `test/run_tests6.mjs`
+  (or a new test file wired into `npm test`). Every builtin needs a
+  `help-data.js` entry.
 - Values use copy-on-write via reference counts (`_refs`, see
   `src/core/values.js`). Anything that stores a value somewhere new must
   `retain` it (Scope.set, Cell/StructArray constructors and setters do

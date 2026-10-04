@@ -1258,7 +1258,7 @@ export class Interpreter {
 
   displayValue(name, val) {
     if (this.host.formatAssignment) { this.print(this.host.formatAssignment(name, val)); return; }
-    this.print(`${name} =\n${formatValue(val)}\n`);
+    this.print(`${name} =\n${formatValue(val, this.displayFormat)}\n`);
   }
 }
 
@@ -1328,7 +1328,7 @@ export function toMatlabError(e) {
 
 // ---------------- free binary operator dispatch ----------------
 
-function applyBinaryOp(op, a, b) {
+export function applyBinaryOp(op, a, b) {
   switch (op) {
     case '+': return Mat.broadcastBinary(a, b, C.cadd);
     case '-': return Mat.broadcastBinary(a, b, C.csub);
@@ -1457,11 +1457,11 @@ function collectFreeIdents(node, bound, out) {
 // (scalars) or a common "1.0e+03 *" scale factor (arrays) when the
 // magnitudes fall outside [0.001, 1000).
 
-export function formatValue(val) {
+export function formatValue(val, style = 'short') {
   if (val instanceof FunctionHandle) return `  function_handle with value:\n\n    ${val.displayName()}`;
   if (val instanceof Cell) return formatCell(val);
   if (val instanceof StructArray) return formatStruct(val);
-  return formatMat(val);
+  return formatMat(val, style);
 }
 
 // One-line summary of a value, as shown inside a cell or struct display.
@@ -1508,8 +1508,13 @@ function formatStruct(s) {
   return `${head} with fields:\n\n` + s.fieldNames.map(f => `    ${f}`).join('\n');
 }
 
-export function formatMat(mat) {
+// `style` is the `format` setting: 'short' shows 4 decimals; 'long' shows
+// about 16 significant digits (15 decimals below 10, fewer above).
+export function formatMat(mat, style = 'short') {
   if (mat.isChar) return mat.toJSString();
+  const long = style === 'long';
+  const decimals = (mag) => (!long ? 4 : mag < 10 ? 15 : Math.max(15 - Math.floor(Math.log10(mag)), 1));
+  const exp = (x) => fmtExp(x, long ? 15 : 4);
   if (mat.isEmpty) return `     [](${mat.rows}x${mat.cols})`;
   const n = mat.numel;
   let allInt = true, maxAbs = 0;
@@ -1526,14 +1531,16 @@ export function formatMat(mat) {
     fmt = (x) => fmtSpecial(x) ?? String(x === 0 ? 0 : x);
   } else if (n === 1) {
     const useFixed = !allInt && maxAbs >= 1e-3 && maxAbs < 1e3;
-    fmt = (x) => fmtSpecial(x) ?? (x === 0 ? '0' : useFixed ? x.toFixed(4) : fmtExp(x));
+    fmt = (x) => fmtSpecial(x) ?? (x === 0 ? '0' : useFixed ? x.toFixed(decimals(maxAbs)) : exp(x));
   } else if (maxAbs === 0 || (maxAbs >= 1e-3 && maxAbs < 1e3)) {
-    fmt = (x) => fmtSpecial(x) ?? (x === 0 ? '0' : x.toFixed(4));
+    const d = decimals(maxAbs);
+    fmt = (x) => fmtSpecial(x) ?? (x === 0 ? '0' : x.toFixed(d));
   } else {
     const p = Math.floor(Math.log10(maxAbs));
     const scale = Math.pow(10, p);
     header = `   1.0e${p < 0 ? '-' : '+'}${String(Math.abs(p)).padStart(2, '0')} *\n\n`;
-    fmt = (x) => fmtSpecial(x) ?? (x === 0 ? '0' : (x / scale).toFixed(4));
+    const d = decimals(1);
+    fmt = (x) => fmtSpecial(x) ?? (x === 0 ? '0' : (x / scale).toFixed(d));
   }
 
   const fmtNum = (r, i) => {
@@ -1562,6 +1569,6 @@ function fmtSpecial(x) {
   return null;
 }
 // e-notation with MATLAB's two-digit exponent: 1.0000e-03, not 1.0000e-3.
-function fmtExp(x) {
-  return x.toExponential(4).replace(/e([+-])(\d)$/, 'e$10$2');
+function fmtExp(x, digits = 4) {
+  return x.toExponential(digits).replace(/e([+-])(\d)$/, 'e$10$2');
 }

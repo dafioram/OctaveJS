@@ -70,7 +70,7 @@ export function createSession(post, { snapshots = true } = {}) {
   function takeDelta() {
     const ws = interp.workspace;
     if (!snapshots) { ws.dirty.clear(); return null; }
-    const d = { vars: [], deleted: [], globalNames: [...ws.globalNames], figureState: { ...interp.figureState } };
+    const d = { vars: [], deleted: [], globalNames: [...ws.globalNames], figureState: { ...interp.figureState }, settings: settingsOf() };
     for (const name of ws.dirty) {
       if (ws.vars.has(name)) d.vars.push([name, serializeValue(ws.vars.get(name))]);
       else d.deleted.push(name);
@@ -91,6 +91,13 @@ export function createSession(post, { snapshots = true } = {}) {
     return out;
   }
 
+  // Small interpreter settings that should survive a Stop: `format`, the
+  // tic stopwatch, and warning on/off state.
+  function settingsOf() {
+    const w = interp.warningState;
+    return { displayFormat: interp.displayFormat, ticTime: interp.ticTime, warnings: w ? { all: w.all, off: [...w.off] } : null };
+  }
+
   function restore(snap) {
     const load = (o) => deserializeValue(o, resolveLocals);
     for (const def of snap.funcTable || []) interp.funcTable.set(def.name, def);
@@ -102,6 +109,11 @@ export function createSession(post, { snapshots = true } = {}) {
     for (const name of snap.globalNames || []) interp.workspace.globalNames.add(name);
     for (const [k, o] of snap.vars || []) interp.workspace.set(k, load(o));
     if (snap.figureState) interp.figureState = { ...snap.figureState };
+    if (snap.settings) {
+      interp.displayFormat = snap.settings.displayFormat;
+      interp.ticTime = snap.settings.ticTime;
+      if (snap.settings.warnings) interp.warningState = { all: snap.settings.warnings.all, off: new Set(snap.settings.warnings.off) };
+    }
     if (snap.figures && snap.figures.length) interp.figures = new Map(snap.figures);
     interp.workspace.dirty.clear();
     interp.globalsDirty = interp.persistentsDirty = interp.funcTableDirty = false;
@@ -117,7 +129,7 @@ export function createSession(post, { snapshots = true } = {}) {
       return { kind: 'text', text: `${v.sizeStr()} ${v.className()} — too large to preview here (${v.numel} elements); use disp() in the Command Window.`, size: v.sizeStr(), cls: v.className() };
     }
     const size = v instanceof FunctionHandle ? '1x1' : v.sizeStr();
-    return { kind: 'text', text: formatValue(v), size, cls: valueClassName(v) };
+    return { kind: 'text', text: formatValue(v, interp.displayFormat), size, cls: valueClassName(v) };
   }
 
   function postWorkspace() { post({ type: 'workspace', workspace: workspaceSummary(), delta: takeDelta() }); }
