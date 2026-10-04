@@ -3,7 +3,14 @@
 // matrix concatenation (which the interpreter already does for `[A B]`
 // and `[A;B]` — these just expose that as callable functions).
 
-import { Mat, MatlabError } from '../core/values.js';
+import { Mat, Cell, MatlabError } from '../core/values.js';
+
+// Cell arrays of strings sort/unique by character codes (MATLAB's order).
+function cellstrValues(c, fname) {
+  if (!c.isCellstr()) throw new MatlabError(`${fname}: cell array input must contain only character vectors`);
+  return c.data.map(v => v.toJSString());
+}
+const codeOrder = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
 
 function tagLogical(mat) { mat.isLogical = true; return mat; }
 
@@ -117,6 +124,13 @@ export function registerArrayOps(reg) {
   reg.set('sort', {
     fn: (args, nargout) => {
       const a = args[0];
+      if (a instanceof Cell) {
+        const strs = cellstrValues(a, 'sort');
+        const descending = args.slice(1).some(x => x.isChar && x.toJSString().toLowerCase() === 'descend');
+        const order = strs.map((s, i) => i).sort((i, j) => (descending ? -1 : 1) * codeOrder(strs[i], strs[j]) || i - j);
+        const out = new Cell(a.rows, a.cols, order.map(i => a.data[i]));
+        return nargout >= 2 ? [out, new Mat(a.rows, a.cols, Float64Array.from(order, i => i + 1))] : [out];
+      }
       let dim = a.rows === 1 ? 2 : 1;
       let descending = false;
       for (let i = 1; i < args.length; i++) {
@@ -161,6 +175,20 @@ export function registerArrayOps(reg) {
   reg.set('unique', {
     fn: (args, nargout) => {
       const a = args[0];
+      if (a instanceof Cell) {
+        const strs = cellstrValues(a, 'unique');
+        const stable = args.slice(1).some(x => x.isChar && x.toJSString().toLowerCase() === 'stable');
+        const first = new Map();
+        strs.forEach((s, k) => { if (!first.has(s)) first.set(s, k); });
+        let keys = [...first.keys()];
+        if (!stable) keys.sort(codeOrder);
+        const rank = new Map(keys.map((s, i) => [s, i]));
+        const asRow = a.rows === 1 && a.numel > 0;
+        const out = [new Cell(asRow ? 1 : keys.length, asRow ? keys.length : 1, keys.map(s => a.data[first.get(s)]))];
+        if (nargout >= 2) out.push(new Mat(keys.length, 1, Float64Array.from(keys, s => first.get(s) + 1)));
+        if (nargout >= 3) out.push(new Mat(strs.length, 1, Float64Array.from(strs, s => rank.get(s) + 1)));
+        return out;
+      }
       let stable = false;
       for (const opt of args.slice(1)) {
         const o = opt.isChar ? opt.toJSString().toLowerCase() : '';

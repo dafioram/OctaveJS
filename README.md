@@ -2,10 +2,12 @@
 
 MatWeb is a real MATLAB-syntax interpreter — a lexer, recursive-descent
 parser, and tree-walking evaluator, all hand-written — running entirely in
-your browser, wrapped in a small IDE: a Command Window (REPL), a script
-editor with syntax highlighting, a workspace browser, and Plotly-based
-plotting. Nothing is sent to a server; once the page is loaded, it works
-offline.
+your browser, wrapped in a small IDE: a Command Window (REPL), a
+multi-file script editor with syntax highlighting, a workspace browser, a
+file panel whose contents are saved in your browser, and Plotly-based
+plotting. Code runs in a background Web Worker, so a long computation
+never freezes the page and can be stopped. Nothing is sent to a server;
+once the page is loaded, it works offline.
 
 It is **not** a MATLAB clone. It implements a real subset of the language
 and a real subset of MATLAB's function library, chosen to cover the common
@@ -16,11 +18,14 @@ than a marketing description.
 
 ## Running it
 
-- **Just want to use it:** open `dist/index.html` in a browser (or serve
-  the `dist/` folder with any static file server — some browsers restrict
-  ES module loading over `file://`, in which case run e.g. `npx serve dist`
-  and open the printed `localhost` URL). Everything needed is already
-  bundled into `dist/main.js`; there is no build step required to use it.
+- **Just want to use it:** serve the `dist/` folder with any static file
+  server (e.g. `npx serve dist`) and open the printed `localhost` URL.
+  Opening `dist/index.html` straight from disk (`file://`) doesn't work in
+  most browsers, which refuse to load ES modules and Web Workers that way.
+  Everything needed is already bundled into `dist/main.js` (the page) and
+  `dist/worker.js` (the interpreter); there is no build step required to
+  use it. If a browser can't start the worker, the app runs code on the
+  page itself instead — everything works except the Stop button.
 - **Deploying to GitHub Pages (recommended — no manual builds):** this repo
   includes `.github/workflows/deploy.yml`, which builds and deploys `dist/`
   automatically on every push to `main`. One-time setup: in the repo's
@@ -43,17 +48,19 @@ than a marketing description.
   esbuild to bundle `src/ui/main.js` and everything it imports —
   math.js, Plotly, Papa Parse, CodeMirror 6 — into `dist/main.js`, with
   `dist/index.html` and `dist/styles.css` copied alongside it).
-- **Running the interpreter's own test suite:** `npm test` (about 210
-  assertions covering the language core, builtins, plotting, file I/O, the
-  MAT5 codec, and MATLAB-compatibility regressions; see `test/`).
+- **Running the interpreter's own test suite:** `npm test` (about 320
+  assertions covering the language core, builtins, cells/structs,
+  try/catch, copy-on-write semantics, the worker protocol, plotting, file
+  I/O, the MAT5 codec, and MATLAB-compatibility regressions; see `test/`).
 
 ## What's implemented
 
 **Language:** variables; real and complex scalars/matrices; string (char
 array) literals; `if`/`elseif`/`else`, `for`, `while`, `switch`/`case`
 (including `case {a,b,c}` multi-value matching), `break`/`continue`/
-`return`; functions with multiple return values (`[a,b] = f(...)`),
-default `nargin`/`nargout`, recursion; anonymous functions (`@(x) ...`,
+`return`; `try`/`catch` (with `catch ME` giving an MException);
+functions with multiple return values (`[a,b] = f(...)`), `nargin`/
+`nargout`, `varargin`/`varargout`, recursion; anonymous functions (`@(x) ...`,
 correctly capturing free variables *by value* at creation time, matching
 real MATLAB); function handles to named functions (`@sin`); `global` and
 `persistent`; the full operator set including matrix vs. elementwise
@@ -61,7 +68,15 @@ operators (`*` vs `.*`, `^` vs `.^`, etc.), ranges (`a:b`, `a:step:b`),
 transpose (`'`, `.'`); both logical and numeric indexing (with the correct
 different semantics for each); linear and 2-D indexing including `end`;
 auto-growing arrays on assignment; element/row/column deletion via
-`x(i) = []`.
+`x(i) = []`. **Cell arrays**: `{a, b; c, d}` literals, `c(i)` (a sub-cell)
+vs. `c{i}` (the contents), comma-separated lists (`c{:}` expands into
+function arguments, `[c{:}]`, `{c{:}}` and `[a, b] = c{:}`), growth and
+deletion. **Structs**: `s.a = 1`, nested `s.a.b.c = 2` (created on the
+fly), struct arrays (`s(3).x = 1`, `[s.x]`), dynamic fields `s.(name)`, and
+any mix of chained assignment such as `s.data{2}(3) = 5`. Arrays have
+value semantics with copy-on-write: `b = a; b(1) = 0` never changes `a`,
+and assigning into a variable nobody else shares (the usual `v(k) = ...`
+loop) updates it in place instead of copying it every time.
 
 **Math:** the trig/exp/log/rounding family (auto-promoting to complex
 where real MATLAB does, e.g. `sqrt(-1)`, `asin(2)`); `sum`, `prod`, `mean`,
@@ -74,11 +89,23 @@ and `'first'`/`'last'`), `any`, `all`, `isnan`, `isinf`, `isfinite`;
 `rank`, `norm`, `dot`, `cross`, `inv`, `pinv`, `eig`, `svd`, `lu`, `qr`;
 `fft`/`ifft`; `polyfit`, `polyval`, `interp1` (linear interpolation).
 
-**Strings:** `strcmp`, `strcmpi`, `upper`, `lower`, `strtrim`, `strrep`,
-`str2double`, `str2num` (evaluates the string as a MATLAB expression
-through this same interpreter — no different in kind from any other code
-you run here). `strsplit` is intentionally not implemented since its
-natural return type is a cell array; see the limitations table below.
+**Strings:** `strcmp`, `strcmpi` (both also compare element-wise against
+a cell array of strings), `upper`, `lower`, `strtrim`, `strrep`,
+`strsplit`, `strjoin`, `str2double`, `str2num` (evaluates the string as a
+MATLAB expression through this same interpreter — no different in kind
+from any other code you run here); `sort` and `unique` accept cell arrays
+of strings.
+
+**Cells & structs:** `cell`, `iscell`, `iscellstr`, `cellfun` and
+`arrayfun` (including `'UniformOutput', false` and multiple outputs),
+`num2cell`, `cell2mat`, `cellstr`, `struct` (cell-valued arguments make
+struct arrays), `fieldnames`, `isfield`, `rmfield`, `isstruct`,
+`getfield`, `setfield`, `struct2cell`, `numfields`.
+
+**Errors:** `error` (message, format + args, or identifier + format),
+`warning` (including `warning('off', id)`), `assert`, `MException`,
+`throw`/`rethrow`, `getReport`. Built-in errors carry identifiers such as
+`MATLAB:UndefinedFunction` and `MATLAB:badsubscript`.
 
 **Plotting:** `plot` (with inline linespec strings like `'r--'` or
 `'b-o'`), `scatter`, `bar`, `histogram`, `hist` (the classic MATLAB
@@ -91,7 +118,8 @@ Plotly-native-binned modern equivalent), `figure`, `hold`, `xlabel`/
 
 **I/O:** `readmatrix`/`writematrix` (CSV), `save`/`load` (a real MAT5
 `.mat` writer/reader — see below), `run('script.m')`, and calling a script
-by its bare name if it's been opened in the app. A `.m` file that starts
+by its bare name. All of these work on the files in the **Files** panel.
+A `.m` file that starts
 with `function` is a *function file*: `name(args)` calls its first
 function, and any further functions in it are local subfunctions visible
 only inside that file (a handle like `@helper` created there keeps working
@@ -107,16 +135,14 @@ there's a reasonable workaround, it's listed.
 |---|---|
 | Double-quoted strings (`"hello"`, MATLAB string arrays) | Single-quoted char arrays: `'hello'` |
 | **General command syntax** for arbitrary/user-defined functions, e.g. calling your own `function foo(s)` as `foo bar` | Use the normal parenthesized form: `foo('bar')`. A small, fixed whitelist — `clear`, `hold`, `grid`, `axis`, `disp` — *does* support command syntax (`clear x y`, `hold on`, `grid off`, `axis equal`, `disp hello`), since those are idiomatic and unambiguous enough to special-case safely; see the note below the table. |
-| Structs (`s.field = ...`) | Separate variables, or parallel arrays |
-| Cell arrays (`{1, 2, 3}`, `c{1}`) | Separate variables, or numeric/char arrays where the contents are uniform |
 | N-D arrays (more than 2 subscripts) | Reshape/index a 2-D matrix, or use multiple 2-D matrices |
 | Integer classes (`int8`, `uint16`, ...) — everything is `double` (or tagged `logical`/`char`) | Just use `double`; a trailing class-name argument to `zeros`/`ones` (e.g. `zeros(3,'int8')`) is silently ignored |
-| Chained indexed assignment, e.g. `f(x)(y) = 3` | Use an intermediate variable |
+| `()` followed by more indexing in an assignment, e.g. `x(2)(3) = 1` (MATLAB rejects this too; `s(2).f = 1` and `c{2}(3) = 1` *are* supported) | Use an intermediate variable |
 | Name-Value pairs to `plot`, e.g. `plot(x,y,'LineWidth',2)` | Inline linespec strings only, e.g. `plot(x,y,'r--')` |
-| `arrayfun`'s `'UniformOutput', false` / cell outputs | Only the scalar-output form is supported (no cells to hold results in) |
 | Matrix/columnwise FFT | `fft`/`ifft` only accept vector input |
 | Complex-matrix `rank`/`svd` | `rank(real(A))` as an approximation, or avoid complex inputs |
-| `strsplit` (would return a cell array) | Not implemented — see the cell-array row above |
+| Saving cell arrays or structs to `.mat` | They're skipped with a note; save their numeric contents as separate variables |
+| `classdef` classes, `containers.Map`, tables | Structs and cell arrays |
 
 **On that command-syntax whitelist:** real MATLAB decides whether `foo bar`
 means "call foo with the string 'bar'" or something else by checking, at
@@ -190,7 +216,8 @@ code in the browser and in this project's own tests):
   bytes), which real tools use constantly and which we specifically added
   read support for after finding it in real output files.
 
-What's **not** implemented: structs, cell arrays, sparse matrices,
+What's **not** implemented: structs and cell arrays (`save` skips them
+with a note), sparse matrices,
 integer-class arrays, `-v7.3` (HDF5-based) files, and compression. If you
 `load()` a `.mat` file containing any of those, or a `-v7.3` file, it will
 fail to parse (HDF5's container format is entirely different from MAT5's
@@ -203,25 +230,42 @@ numeric/char case described above.
 src/core/       lexer.js, parser.js, values.js, cmath.js, interpreter.js
                 — the language itself, no DOM/UI dependency.
 src/builtins/   elementwise.js, reduction.js, linalg.js, fft.js,
-                system.js, plotting.js, io.js, index.js
-                — the function library, registered into the interpreter.
+                system.js, plotting.js, io.js, containers.js, errors.js,
+                index.js — the function library, registered into the
+                interpreter.
 src/mat5/       mat5.js — the MAT5 binary codec.
-src/ui/         main.js, matlab-lang.js, styles.css
-                — the browser app: DOM wiring, CodeMirror setup, Plotly
-                  glue. Everything here is what actually needs a browser;
-                  everything above it is plain, testable JS.
-test/           harness.js + four test files — run with `npm test`.
-build.mjs       esbuild bundling script -> dist/.
+src/worker/     session.js — the interpreter side of the page <-> worker
+                message protocol (no DOM, tested under Node);
+                worker.js — the Web Worker entry point.
+src/ui/         main.js, backend.js, vfs.js, matlab-lang.js, styles.css
+                — the browser app: DOM wiring, the worker (or in-page
+                  fallback) backend, the IndexedDB file store, CodeMirror
+                  setup, Plotly glue. Everything here is what actually
+                  needs a browser; everything above it is plain, testable JS.
+test/           harness.js + five test files — run with `npm test`.
+build.mjs       esbuild bundling script -> dist/ (main.js and worker.js).
 ```
 
-The interpreter takes a `host` object (see `src/ui/main.js`'s `host`
-constant) so it can run identically in a browser or in Node for testing:
-`host.print(text)` for console output, `host.figures.render(...)` for
-plotting, `host.io.download*` for triggering file saves. `interp.files`
-is a small virtual filesystem (`Map`) that the UI populates from file
-pickers/drag-and-drop, which `readmatrix`/`save`/`load`/`run` all read
-from — this is also how the test suite exercises file I/O without a real
-filesystem or browser.
+The interpreter takes a `host` object so it can run identically in a
+worker, on the page, or in Node for testing: `host.print(text)` for
+console output, `host.figures.render(...)` for plotting,
+`host.io.fileWritten(name, entry)` to report files written by `save`/
+`writematrix`. `interp.files` is a small virtual filesystem (`Map`) kept
+in sync with the Files panel, which `readmatrix`/`save`/`load`/`run` and
+function-file lookup all use — this is also how the test suite exercises
+file I/O without a real filesystem or browser.
+
+**The worker and Stop.** The page talks to `src/worker/session.js` by
+messages (`run`, `putFile`, `getVar`, … → `print`, `done`, `fileWritten`,
+…). After each command the session also sends a *delta* of the variables,
+globals, persistents and functions that changed; the page folds these
+into a mirror of the session state. JavaScript can't interrupt a busy
+worker without cross-origin-isolation headers that static hosts like
+GitHub Pages can't set, so **Stop terminates the worker** and starts a new
+one from that mirror — your workspace comes back exactly as it was
+before the interrupted command (changes the command made before you
+stopped it are discarded). The mirror does keep a second copy of the
+workspace in the page's memory.
 
 ## A few smaller, worth-knowing behaviors
 
@@ -233,8 +277,19 @@ filesystem or browser.
   than preserved — user functions only get a signature, not a description.
 - `clc` clears the Command Window's output (wired to the same action as
   Edit → Clear command window in the menu bar).
-- Click a script's filename in the Script Editor toolbar to rename it
-  before saving — otherwise every new script saves as `untitled.m`.
+- **Files** (the third sidebar tab) holds your scripts and data, saved in
+  the browser's IndexedDB so they survive reloads. New scripts, uploads
+  (or drag-and-drop anywhere on the page), and files written by `save`/
+  `writematrix` all land there; use &#x2913; to download a file, &times;
+  to delete it. Clicking a `.m` file opens it in the editor.
+- The Script Editor has one tab per open file and saves your edits
+  automatically as you type (there's no separate save step; *File →
+  Download current script* gives you a copy). Click the filename in the
+  editor toolbar to rename the script. Open tabs are restored on reload.
+- **Stop** (next to the command line, or Ctrl+C there with no text
+  selected) interrupts a running command; see "The worker and Stop"
+  above for what happens to the workspace. Commands you enter while one
+  is running are queued and run in order.
 - Each open figure gets its own tab in the Figures panel; click the
   &times; on a tab to close that figure. Closing the last one resets
   figure numbering, so the next plot starts again at Figure 1.
@@ -246,19 +301,15 @@ filesystem or browser.
   a script that calls `figure(1)`, plots, then `figure(2)`, plots again),
   the app flips through each one in the order it was created, about a
   second apart, ending on the last.
-- The left sidebar has two views — **Workspace** (variables) and
+- The left sidebar has three views — **Workspace** (variables),
   **History** (everything you've typed or run, most recent first,
-  persisted across sessions in `localStorage`). Click any history entry
-  to run it again immediately. Hitting **Run** on a script logs
-  `run('<filename>.m')` to history too, so re-running a whole script
-  later is one click away.
-  - Why `localStorage` and not `IndexedDB`: history is just a capped
-    list of strings (500 entries max) — comfortably under any
-    `localStorage` size limit, and its plain synchronous get/set API is
-    simpler than `IndexedDB` for data this small and unstructured.
-    `IndexedDB` would only start to pay for itself with much larger or
-    more structured data (e.g. saved datasets), which isn't what command
-    history is.
+  persisted across sessions in `localStorage`), and **Files** (above).
+  Click any history entry to run it again immediately. Hitting **Run** on
+  a script logs `run('<filename>.m')` to history too, so re-running a
+  whole script later is one click away.
+  - History uses `localStorage` (a capped list of 500 strings — small and
+    simple), while files use IndexedDB, which handles much larger and
+    binary data such as `.mat` files.
 - Values display like MATLAB's default `format short`: integer-valued
   arrays as integers, everything else with 4 decimals, switching to
   e-notation for scalars (`1.0000e+10`) or a common `1.0e+03 *` scale

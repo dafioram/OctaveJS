@@ -8,8 +8,8 @@
 // README's "math.js limitations" section.
 
 import * as math from 'mathjs';
-import { Mat, MatlabError } from '../core/values.js';
-import { _registerLinalgHooks } from '../core/interpreter.js';
+import { Mat, Cell, StructArray, MatlabError } from '../core/values.js';
+import { _registerLinalgHooks, transposeContainer } from '../core/interpreter.js';
 
 function toRowMajor(mat) {
   const rows = [];
@@ -191,7 +191,11 @@ export function registerLinalg(reg) {
       } else throw new MatlabError('reshape expects reshape(A, r, c) or reshape(A, [r c])');
       r = Math.round(r); c = Math.round(c);
       if (r * c !== a.numel) throw new MatlabError(`reshape: cannot reshape ${a.sizeStr()} (${a.numel} elements) to ${r}x${c}`);
-      const out = new Mat(r, c, a.re, a.im, { isChar: a.isChar, isLogical: a.isLogical });
+      if (a instanceof Cell) return [new Cell(r, c, a.data.slice())];
+      if (a instanceof StructArray) return [new StructArray(r, c, a.fieldNames, a.data.map(el => new Map(el)), a.classOverride)];
+      // Copy the data: values are modified in place by indexed assignment
+      // (copy-on-write), so two arrays must never share a buffer.
+      const out = new Mat(r, c, Float64Array.from(a.re), a.im ? Float64Array.from(a.im) : null, { isChar: a.isChar, isLogical: a.isLogical });
       return [out];
     },
   });
@@ -244,8 +248,9 @@ export function registerLinalg(reg) {
     }
     return new Mat(v.cols, v.rows, re, im, { isChar: v.isChar, isLogical: v.isLogical });
   }
-  reg.set('transpose', { fn: (args) => [transposeGeneric(args[0], false)] });
-  reg.set('ctranspose', { fn: (args) => [transposeGeneric(args[0], true)] });
+  const transposeAny = (v, conj) => (v instanceof Cell || v instanceof StructArray) ? transposeContainer(v) : transposeGeneric(v, conj);
+  reg.set('transpose', { fn: (args) => [transposeAny(args[0], false)] });
+  reg.set('ctranspose', { fn: (args) => [transposeAny(args[0], true)] });
 
   reg.set('det', { fn: (args) => { requireSquare(args[0], 'det'); return [fromRowMajor(math.det(toRowMajor(args[0])))]; } });
   reg.set('trace', {

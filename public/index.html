@@ -17,11 +17,12 @@
         <div class="menu-dropdown" data-dropdown="file">
           <button data-action="new-script">New script</button>
           <button data-action="open-m">Open .m script…</button>
-          <button data-action="save-m">Save script as .m</button>
+          <button data-action="save-m">Download current script</button>
+          <button data-action="upload-files">Upload files…</button>
           <div class="menu-sep"></div>
           <button data-action="import-csv">Import CSV into workspace…</button>
           <button data-action="open-mat">Load workspace (.mat)…</button>
-          <button data-action="save-mat">Save workspace (.mat)</button>
+          <button data-action="save-mat">Save and download workspace (.mat)</button>
         </div>
       </div>
       <div class="menu-item" data-menu="edit">
@@ -38,6 +39,7 @@
           <button data-action="focus-command">Command window</button>
           <button data-action="focus-editor">Script editor</button>
           <button data-action="focus-figures">Figures</button>
+          <button data-action="focus-files">Files</button>
         </div>
       </div>
       <div class="menu-item" data-menu="help">
@@ -55,6 +57,7 @@
         <nav class="sidebar-subtabs" id="sidebar-subtabs">
           <button class="sidebar-subtab active" data-subtab="workspace">Workspace</button>
           <button class="sidebar-subtab" data-subtab="history">History</button>
+          <button class="sidebar-subtab" data-subtab="files">Files</button>
         </nav>
         <div class="sidebar-view active" data-subview="workspace">
           <div class="workspace-list" id="workspace-list">
@@ -64,6 +67,15 @@
         <div class="sidebar-view" data-subview="history">
           <div class="history-list" id="history-list">
             <div class="workspace-empty">No commands yet</div>
+          </div>
+        </div>
+        <div class="sidebar-view" data-subview="files">
+          <div class="files-toolbar">
+            <button class="btn btn-small" id="files-new">New script</button>
+            <button class="btn btn-small" id="files-upload">Upload…</button>
+          </div>
+          <div class="files-list" id="files-list">
+            <div class="workspace-empty">No files yet</div>
           </div>
         </div>
       </aside>
@@ -80,14 +92,17 @@
           <div class="console-input-row">
             <span class="console-prompt">&gt;&gt;</span>
             <input type="text" id="console-input" class="console-input" autocomplete="off" spellcheck="false" placeholder="Type a command and press Enter…">
+            <span class="busy-indicator" id="busy-indicator" aria-live="polite">Busy</span>
+            <button class="btn btn-small btn-stop" id="stop-button" disabled>Stop</button>
           </div>
         </section>
 
         <section class="tab-panel" data-panel="editor">
+          <nav class="figure-tab-strip editor-tabs" id="editor-tabs"></nav>
           <div class="editor-toolbar">
             <button data-action="run-script" class="btn btn-primary">Run</button>
             <button data-action="run-selection" class="btn">Run selection</button>
-            <span class="editor-filename" id="editor-filename" title="Click to rename">untitled.m</span>
+            <span class="editor-filename" id="editor-filename" title="Click to rename">(no file open)</span>
           </div>
           <div class="editor-mount" id="editor-mount"></div>
         </section>
@@ -106,7 +121,8 @@
     <div class="modal-box" id="modal-box"></div>
   </div>
 
-  <input type="file" id="file-input-m" accept=".m" style="display:none">
+  <input type="file" id="file-input-m" accept=".m" multiple style="display:none">
+  <input type="file" id="file-input-any" multiple style="display:none">
   <input type="file" id="file-input-csv" accept=".csv" style="display:none">
   <input type="file" id="file-input-mat" accept=".mat" style="display:none">
 

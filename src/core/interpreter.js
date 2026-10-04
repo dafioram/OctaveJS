@@ -9,7 +9,10 @@
 // matches real MATLAB closure semantics.
 
 import { parse } from './parser.js';
-import { Mat, FunctionHandle, MatlabError, colonRange } from './values.js';
+import {
+  Mat, Cell, StructArray, FunctionHandle, MatlabError, colonRange,
+  retain, release, valueClassName, makeMException,
+} from './values.js';
 import * as C from './cmath.js';
 
 class BreakSignal { }
@@ -17,37 +20,59 @@ class ContinueSignal { }
 class ReturnSignal { }
 
 class Scope {
-  constructor(interp, { isFunction = false, funcName = null } = {}) {
+  constructor(interp, { isFunction = false, funcName = null, trackDirty = false } = {}) {
     this.interp = interp;
     this.vars = new Map();
     this.isFunction = isFunction;
     this.funcName = funcName;
     this.globalNames = new Set();
     this.persistentNames = new Set();
+    // The base workspace records which names changed, so the worker can
+    // send the page a delta (for restoring state after Stop).
+    this.dirty = trackDirty ? new Set() : null;
   }
-  has(name) {
-    if (this.globalNames.has(name)) return this.interp.globals.has(name);
-    if (this.persistentNames.has(name)) return this.interp._persistentStore(this.funcName).has(name);
-    return this.vars.has(name);
+  _store(name) {
+    if (this.globalNames.has(name)) return this.interp.globals;
+    if (this.persistentNames.has(name)) return this.interp._persistentStore(this.funcName);
+    return this.vars;
   }
-  get(name) {
-    if (this.globalNames.has(name)) return this.interp.globals.get(name);
-    if (this.persistentNames.has(name)) return this.interp._persistentStore(this.funcName).get(name);
-    return this.vars.get(name);
+  _markDirty(name) {
+    if (this.globalNames.has(name)) this.interp.globalsDirty = true;
+    else if (this.persistentNames.has(name)) this.interp.persistentsDirty = true;
+    else if (this.dirty) this.dirty.add(name);
   }
+  has(name) { return this._store(name).has(name); }
+  get(name) { return this._store(name).get(name); }
+  // Stores keep reference counts (see values.js) so indexed assignment
+  // knows when it may modify a value in place.
   set(name, value) {
-    if (this.globalNames.has(name)) { this.interp.globals.set(name, value); return; }
-    if (this.persistentNames.has(name)) { this.interp._persistentStore(this.funcName).set(name, value); return; }
-    this.vars.set(name, value);
+    const store = this._store(name);
+    const old = store.get(name);
+    if (old !== value) { retain(value); release(old); }
+    store.set(name, value);
+    this._markDirty(name);
+  }
+  delete(name) {
+    if (this.globalNames.has(name)) { this.globalNames.delete(name); if (this.dirty) this.dirty.add(name); return; }
+    if (this.vars.has(name)) { release(this.vars.get(name)); this.vars.delete(name); if (this.dirty) this.dirty.add(name); }
+  }
+  clearAll() {
+    for (const name of [...this.vars.keys(), ...this.globalNames]) this.delete(name);
+  }
+  // Drop this scope's holds on its values (a function call returning).
+  releaseAll() {
+    for (const v of this.vars.values()) release(v);
   }
   declareGlobal(name) {
+    if (this.vars.has(name)) { release(this.vars.get(name)); this.vars.delete(name); }
     this.globalNames.add(name);
-    if (!this.interp.globals.has(name)) this.interp.globals.set(name, Mat.empty());
+    if (!this.interp.globals.has(name)) { this.interp.globals.set(name, retain(Mat.empty())); this.interp.globalsDirty = true; }
+    if (this.dirty) this.dirty.add(name);
   }
   declarePersistent(name) {
     this.persistentNames.add(name);
     const store = this.interp._persistentStore(this.funcName);
-    if (!store.has(name)) store.set(name, Mat.empty());
+    if (!store.has(name)) { store.set(name, retain(Mat.empty())); this.interp.persistentsDirty = true; }
   }
   names() {
     return new Set([...this.vars.keys(), ...this.globalNames, ...this.persistentNames]);
@@ -57,7 +82,10 @@ class Scope {
 export class Interpreter {
   constructor(host = {}) {
     this.host = host; // { print(text), warn(text), figures: {...}, files: Map, ... }
-    this.workspace = new Scope(this, { isFunction: false });
+    this.workspace = new Scope(this, { isFunction: false, trackDirty: true });
+    this.globalsDirty = false;
+    this.persistentsDirty = false;
+    this.funcTableDirty = false;
     this.funcTable = new Map(); // user-defined functions (script-local)
     this.globals = new Map();
     this._persistents = new Map(); // funcName -> Map
@@ -99,7 +127,7 @@ export class Interpreter {
     // textual definition later in the same file.
     const execStmts = [];
     for (const stmt of ast.body) {
-      if (stmt.type === 'FunctionDef') this.funcTable.set(stmt.name, stmt);
+      if (stmt.type === 'FunctionDef') { this.funcTable.set(stmt.name, stmt); this.funcTableDirty = true; }
       else execStmts.push(stmt);
     }
     for (const stmt of execStmts) {
@@ -130,6 +158,7 @@ export class Interpreter {
         if (stmt.type !== 'FunctionDef') throw new MatlabError(`Function file '${name}.m' may only contain function definitions`);
         locals.set(stmt.name, stmt);
       }
+      locals.fileName = name; // lets function handles to subfunctions be serialized
       for (const def of locals.values()) def.locals = locals;
       info = { text: entry.text, ast, kind: 'function', primary: first };
     } else {
@@ -155,10 +184,12 @@ export class Interpreter {
           return;
         }
         const vals = this.evalForNargout(node.expr, scope, 0); // side-effect calls (e.g. plot) want nargout=0
-        if (vals.length > 0 && !(node.expr.type === 'Index' && this._isVoidCallTarget(node.expr, scope))) {
-          this.workspace.set('ans', vals[0]);
-          if (scope !== this.workspace) scope.set('ans', vals[0]);
-          if (!node.suppressed) this.displayValue('ans', vals[0]);
+        // A comma-separated list (c{:}, s.field on a struct array) shows
+        // every element as `ans`; anything else shows just its value.
+        const shown = isCsListNode(node.expr) ? vals : vals.slice(0, 1);
+        for (const v of shown) {
+          scope.set('ans', v);
+          if (!node.suppressed) this.displayValue('ans', v);
         }
         return;
       }
@@ -168,13 +199,24 @@ export class Interpreter {
         if (!node.suppressed) this.displayAssignTarget(node.target, scope);
         return;
       }
+      case 'Try': {
+        try {
+          this.execBlock(node.body, scope);
+        } catch (e) {
+          if (e instanceof BreakSignal || e instanceof ContinueSignal || e instanceof ReturnSignal) throw e;
+          const err = toMatlabError(e);
+          if (node.ident) scope.set(node.ident, makeMException(err.identifier, err.message));
+          this.execBlock(node.catchBody, scope);
+        }
+        return;
+      }
       case 'MultiAssign': {
         const vals = this.evalForNargout(node.expr, scope, node.targets.length);
         for (let k = 0; k < node.targets.length; k++) {
           const t = node.targets[k];
           if (t.type === 'Tilde') continue;
           const v = vals[k];
-          if (v === undefined) throw new MatlabError('Not enough output arguments returned');
+          if (v === undefined) throw new MatlabError('Insufficient number of outputs from right hand side of equal sign to satisfy assignment.');
           this.assignTo(t, v, scope);
         }
         if (!node.suppressed) {
@@ -187,7 +229,7 @@ export class Interpreter {
       }
       case 'If': {
         for (const clause of node.clauses) {
-          if (this.evalExpr(clause.test, scope).isTruthy()) {
+          if (this._truthy(this.evalExpr(clause.test, scope))) {
             this.execBlock(clause.body, scope);
             return;
           }
@@ -197,6 +239,25 @@ export class Interpreter {
       }
       case 'For': {
         const iterVal = this.evalExpr(node.iter, scope);
+        if (!(iterVal instanceof Mat)) {
+          // Cell and struct arrays iterate column by column too, each
+          // iteration getting a rows-by-1 piece of the container.
+          if (!(iterVal instanceof Cell || iterVal instanceof StructArray)) throw new MatlabError(`Cannot iterate over a ${valueClassName(iterVal)}`);
+          for (let c = 0; c < iterVal.cols; c++) {
+            const pieces = iterVal.data.slice(c * iterVal.rows, (c + 1) * iterVal.rows);
+            const col = iterVal instanceof Cell ? new Cell(iterVal.rows, 1, pieces)
+              : new StructArray(iterVal.rows, 1, iterVal.fieldNames, pieces.map(el => new Map(el)), iterVal.classOverride);
+            scope.set(node.varName, col);
+            try {
+              this.execBlock(node.body, scope);
+            } catch (e) {
+              if (e instanceof BreakSignal) break;
+              if (e instanceof ContinueSignal) continue;
+              throw e;
+            }
+          }
+          return;
+        }
         // Iterate over columns (MATLAB semantics): for a row vector this is
         // one element per iteration; for a matrix, one column per iteration.
         for (let c = 0; c < iterVal.cols; c++) {
@@ -211,6 +272,7 @@ export class Interpreter {
             }
           }
           if (colIm) col.im = colIm;
+          col.isChar = iterVal.isChar; col.isLogical = iterVal.isLogical;
           scope.set(node.varName, col);
           try {
             this.execBlock(node.body, scope);
@@ -223,7 +285,7 @@ export class Interpreter {
         return;
       }
       case 'While': {
-        while (this.evalExpr(node.test, scope).isTruthy()) {
+        while (this._truthy(this.evalExpr(node.test, scope))) {
           try {
             this.execBlock(node.body, scope);
           } catch (e) {
@@ -248,7 +310,7 @@ export class Interpreter {
       case 'Break': throw new BreakSignal();
       case 'Continue': throw new ContinueSignal();
       case 'Return': throw new ReturnSignal();
-      case 'FunctionDef': this.funcTable.set(node.name, node); return;
+      case 'FunctionDef': this.funcTable.set(node.name, node); this.funcTableDirty = true; return;
       case 'Global': for (const n of node.names) scope.declareGlobal(n); return;
       case 'Persistent': for (const n of node.names) scope.declarePersistent(n); return;
       default:
@@ -256,7 +318,16 @@ export class Interpreter {
     }
   }
 
+  _truthy(v) {
+    if (!(v instanceof Mat)) throw new MatlabError(`Conversion to logical from ${valueClassName(v)} is not possible.`);
+    return v.isTruthy();
+  }
+
   _switchMatches(subject, testVal) {
+    // `case {a, b}` with a cell value matches any of its elements.
+    if (testVal instanceof Cell) return testVal.data.some(v => this._switchMatches(subject, v));
+    if (!(subject instanceof Mat)) throw new MatlabError('SWITCH expression must be a scalar or a character vector.');
+    if (!(testVal instanceof Mat)) return false;
     if (subject.isChar && testVal.isChar) return subject.toJSString() === testVal.toJSString();
     if (subject.isChar !== testVal.isChar) return false;
     if (subject.numel !== testVal.numel) return false;
@@ -273,59 +344,249 @@ export class Interpreter {
     for (const s of stmts) this.execStmt(s, scope);
   }
 
-  _isVoidCallTarget(indexNode, scope) {
-    // Heuristic used only to decide whether to store/print `ans`: a bare
-    // call to a function that returns nothing (like `plot(...)`, `disp(...)`)
-    // should not touch `ans`. We treat "returned an empty array list" as
-    // void, which evalForNargout already produces for such builtins.
-    return false;
-  }
-
   // ---------------- assignment targets ----------------
+  //
+  // An assignment target is a root variable plus a chain of accessors,
+  // e.g. `s.data{2}(3) = v` is s -> .data -> {2} -> (3). _assignPath walks
+  // the chain, creating structs/cells/arrays as needed, and rebuilds each
+  // level. A level is modified in place when it's "owned" — held only by
+  // its parent (refcount <= 1, with every level above it also owned) —
+  // and copied first otherwise (copy-on-write).
 
   assignTo(target, value, scope) {
     if (target.type === 'Ident') { scope.set(target.name, value); return; }
-    if (target.type === 'Field') {
-      throw new MatlabError(`Struct field assignment ('${this._exprSrc(target)}') is not supported — structs aren't implemented. Use separate variables instead.`);
+    const { root, chain } = this._flattenLValue(target);
+    const cur = scope.has(root) ? scope.get(root) : undefined;
+    const updated = this._assignPath(cur, cur !== undefined && cur._refs <= 1, chain, 0, value, scope);
+    scope.set(root, updated);
+  }
+
+  _flattenLValue(node) {
+    const chain = [];
+    while (node.type !== 'Ident') {
+      if (node.type === 'Index') chain.unshift({ kind: 'paren', args: node.args });
+      else if (node.type === 'CellIndex') chain.unshift({ kind: 'brace', args: node.args });
+      else if (node.type === 'Field') chain.unshift({ kind: 'field', name: node.name });
+      else if (node.type === 'DynField') chain.unshift({ kind: 'field', nameExpr: node.nameExpr });
+      else throw new MatlabError('Invalid assignment target');
+      node = node.target;
     }
-    if (target.type === 'Index') {
-      const baseName = this._rootIdentName(target.target);
-      let mat = scope.has(baseName) ? scope.get(baseName) : Mat.empty();
-      if (!(mat instanceof Mat)) throw new MatlabError(`Cannot index-assign into '${baseName}' (not a matrix)`);
-      if (!(value instanceof Mat)) throw new MatlabError(`Cannot store a ${className(value)} inside a numeric array`);
-      const fresh = mat.isEmpty && !mat.isChar && !mat.isLogical;
-      mat = this.indexedAssign(mat.clone(), target.args, scope, value);
-      if (fresh) {
-        // Assigning into a new/empty variable takes on the value's class:
-        // `s = []; s(1) = 'a'` yields a char, not a double.
-        mat.isChar = value.isChar; mat.isLogical = value.isLogical;
-      } else if (mat.isLogical && !value.isLogical) {
-        // Storing numbers into a logical array converts them to logical.
-        for (let k = 0; k < mat.numel; k++) {
-          const nz = mat.re[k] !== 0 || (mat.isComplex && mat.im[k] !== 0);
-          mat.re[k] = nz ? 1 : 0;
-        }
-        mat.im = null;
+    return { root: node.name, chain };
+  }
+
+  _fieldName(acc, scope) {
+    if (acc.name !== undefined) return acc.name;
+    const v = this.evalExpr(acc.nameExpr, scope);
+    if (!(v instanceof Mat) || !v.isChar) throw new MatlabError('Dynamic structure field names must be character vectors');
+    const name = v.toJSString();
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(name)) throw new MatlabError(`Invalid field name '${name}'`);
+    return name;
+  }
+
+  _own(v, owned) { return owned ? v : v.clone(); }
+
+  _assignPath(cur, owned, chain, i, value, scope) {
+    if (i === chain.length) return value;
+    // Storing a container into itself (s.b = s, c{2} = c) must store a
+    // copy, or modifying it in place would make it contain itself.
+    if (value === cur && (cur instanceof Cell || cur instanceof StructArray)) value = value.clone();
+    const acc = chain[i];
+    const last = i === chain.length - 1;
+    const isBlank = cur === undefined || (cur instanceof Mat && cur.isEmpty);
+
+    if (acc.kind === 'field') {
+      let s;
+      if (isBlank) s = new StructArray(1, 1, []);
+      else if (cur instanceof StructArray) s = this._own(cur, owned);
+      else throw new MatlabError('Field assignment to a non-structure array object.');
+      if (s.numel === 0) s = new StructArray(1, 1, s.fieldNames);
+      if (s.numel !== 1) throw new MatlabError('Scalar structure required for this assignment.');
+      const name = this._fieldName(acc, scope);
+      const child = s.hasField(name) ? s.data[0].get(name) : undefined;
+      s.setField(0, name, this._assignPath(child, child !== undefined && child._refs <= 1, chain, i + 1, value, scope));
+      return s;
+    }
+
+    if (acc.kind === 'brace') {
+      let c;
+      if (isBlank) c = Cell.empty();
+      else if (cur instanceof Cell) c = this._own(cur, owned);
+      else throw new MatlabError('Unable to perform assignment because brace indexing is not supported for variables of this type.');
+      const sel = this._assignSelection(c, acc.args, scope);
+      if (sel.positions.length !== 1) throw new MatlabError('Brace assignment needs exactly one target element here.');
+      this._growContainer(c, sel);
+      const pos = sel.positions[0];
+      const child = c.data[pos];
+      c.setLin(pos, last ? value : this._assignPath(child, child._refs <= 1, chain, i + 1, value, scope));
+      return c;
+    }
+
+    // paren
+    if (!last) {
+      // The only form allowed past `(...)` is s(k).field on a struct array.
+      const next = chain[i + 1];
+      if (next.kind !== 'field') throw new MatlabError('()-indexing must appear last in an index expression.');
+      let s;
+      if (isBlank) s = new StructArray(0, 0, []);
+      else if (cur instanceof StructArray) s = this._own(cur, owned);
+      else throw new MatlabError('Field assignment to a non-structure array object.');
+      const sel = this._assignSelection(s, acc.args, scope);
+      if (sel.positions.length !== 1) throw new MatlabError('Field assignment through ()-indexing needs exactly one struct element.');
+      this._growContainer(s, sel);
+      const pos = sel.positions[0];
+      const name = this._fieldName(next, scope);
+      const child = s.hasField(name) ? s.data[pos].get(name) : undefined;
+      s.setField(pos, name, this._assignPath(child, child !== undefined && child._refs <= 1, chain, i + 2, value, scope));
+      return s;
+    }
+    return this._parenAssign(cur, owned, acc.args, value, scope);
+  }
+
+  // x(i) = v, with x a matrix, cell array or struct array (or not yet defined).
+  _parenAssign(cur, owned, args, value, scope) {
+    const blank = cur === undefined || (cur instanceof Mat && cur.isEmpty && !(value instanceof Mat));
+    const isDelete = value instanceof Mat && value.isEmpty && value.rows === 0 && value.cols === 0;
+    if (cur instanceof Cell || (blank && value instanceof Cell)) {
+      const c = cur instanceof Cell ? this._own(cur, owned) : Cell.empty();
+      if (isDelete) return this._containerDelete(c, args, scope);
+      if (!(value instanceof Cell)) throw new MatlabError(`Conversion to cell from ${valueClassName(value)} is not possible.`);
+      return this._containerAssign(c, args, scope, value);
+    }
+    if (cur instanceof StructArray || (blank && value instanceof StructArray)) {
+      const s = cur instanceof StructArray ? this._own(cur, owned) : new StructArray(0, 0, value.fieldNames);
+      if (isDelete) return this._containerDelete(s, args, scope);
+      if (!(value instanceof StructArray)) throw new MatlabError(`Conversion to struct from ${valueClassName(value)} is not possible.`);
+      return this._containerAssign(s, args, scope, value);
+    }
+    if (cur !== undefined && !(cur instanceof Mat)) throw new MatlabError(`Unable to use ()-assignment on a ${valueClassName(cur)}.`);
+    if (!(value instanceof Mat)) throw new MatlabError(`Conversion to double from ${valueClassName(value)} is not possible.`);
+    let mat = cur === undefined ? Mat.empty() : (owned ? cur : cur.clone());
+    if (value === mat) value = value.clone(); // e.g. x(end:-1:1) = x
+    const fresh = mat.isEmpty && !mat.isChar && !mat.isLogical;
+    mat = this.indexedAssign(mat, args, scope, value);
+    if (fresh) {
+      // Assigning into a new/empty variable takes on the value's class:
+      // `s = []; s(1) = 'a'` yields a char, not a double.
+      mat.isChar = value.isChar; mat.isLogical = value.isLogical;
+    } else if (mat.isLogical && !value.isLogical) {
+      // Storing numbers into a logical array converts them to logical.
+      for (let k = 0; k < mat.numel; k++) {
+        const nz = mat.re[k] !== 0 || (mat.isComplex && mat.im[k] !== 0);
+        mat.re[k] = nz ? 1 : 0;
       }
-      scope.set(baseName, mat);
-      return;
+      mat.im = null;
     }
-    throw new MatlabError(`Invalid assignment target of type ${target.type}`);
+    return mat;
   }
 
-  _rootIdentName(node) {
-    if (node.type === 'Ident') return node.name;
-    throw new MatlabError('Chained indexed assignment (e.g. f(x)(y)=...) is not supported');
+  // Resolves the target positions of an assignment into a cell/struct
+  // array, and the (possibly larger) size the array must grow to.
+  _assignSelection(arr, args, scope) {
+    if (args.length === 1) {
+      let positions;
+      if (args[0].type === 'FullColon') positions = Array.from({ length: arr.numel }, (_, k) => k);
+      else {
+        this.endStack.push(arr.numel);
+        let idx;
+        try { idx = this.evalExpr(args[0], scope); } finally { this.endStack.pop(); }
+        positions = this._resolvePositions(idx, arr.numel);
+      }
+      const need = positions.length ? Math.max(...positions) + 1 : 0;
+      let rows = arr.rows, cols = arr.cols;
+      if (need > arr.numel) {
+        if (arr.numel === 0 || arr.rows === 1) { rows = 1; cols = need; }
+        else if (arr.cols === 1) { rows = need; cols = 1; }
+        else throw new MatlabError('Attempt to grow a matrix along ambiguous dimension; use two subscripts instead.');
+      }
+      return { positions, rows, cols };
+    }
+    if (args.length === 2) {
+      const sel = (node, size) => {
+        if (node.type === 'FullColon') return Array.from({ length: size }, (_, k) => k);
+        this.endStack.push(size);
+        try { return this._resolvePositions(this.evalExpr(node, scope), size); } finally { this.endStack.pop(); }
+      };
+      const rowSel = sel(args[0], arr.rows), colSel = sel(args[1], arr.cols);
+      const rows = Math.max(arr.rows, rowSel.length ? Math.max(...rowSel) + 1 : 0);
+      const cols = Math.max(arr.cols, colSel.length ? Math.max(...colSel) + 1 : 0);
+      const positions = [];
+      for (const c of colSel) for (const r of rowSel) positions.push(c * rows + r);
+      return { positions, rows, cols };
+    }
+    throw new MatlabError('Indexing with more than 2 subscripts is not supported (N-D arrays are out of scope)');
   }
 
-  _exprSrc(node) { return node && node.name ? node.name : '<expr>'; }
+  _growContainer(arr, sel) {
+    if (sel.rows === arr.rows && sel.cols === arr.cols) return;
+    const data = new Array(sel.rows * sel.cols);
+    for (let c = 0; c < arr.cols; c++) for (let r = 0; r < arr.rows; r++) data[c * sel.rows + r] = arr.data[c * arr.rows + r];
+    for (let k = 0; k < data.length; k++) {
+      if (data[k] !== undefined) continue;
+      if (arr instanceof Cell) data[k] = retain(Mat.empty());
+      else { const el = arr.newElement(); for (const v of el.values()) retain(v); data[k] = el; }
+    }
+    arr.data = data; arr.rows = sel.rows; arr.cols = sel.cols;
+  }
+
+  _containerAssign(arr, args, scope, value) {
+    const sel = this._assignSelection(arr, args, scope);
+    const n = sel.positions.length;
+    if (value.numel !== 1 && value.numel !== n) {
+      throw new MatlabError(`Unable to perform assignment because the left and right sides have a different number of elements (${n} and ${value.numel}).`);
+    }
+    if (arr instanceof StructArray) {
+      if (arr.numel === 0 && arr.fieldNames.length === 0) { for (const f of value.fieldNames) arr.addField(f); }
+      const same = arr.fieldNames.length === value.fieldNames.length && value.fieldNames.every(f => arr.hasField(f));
+      if (!same) throw new MatlabError('Subscripted assignment between dissimilar structures.');
+    }
+    this._growContainer(arr, sel);
+    sel.positions.forEach((pos, k) => {
+      const src = value.data[value.numel === 1 ? 0 : k];
+      if (arr instanceof Cell) { arr.setLin(pos, src); return; }
+      for (const f of arr.fieldNames) arr.setField(pos, f, src.get(f));
+    });
+    return arr;
+  }
+
+  _containerDelete(arr, args, scope) {
+    const drop = new Set();
+    let rows, cols;
+    if (args.length === 1) {
+      const sel = this._readSelection(arr, args, scope);
+      sel.positions.forEach(p => drop.add(p));
+      const keep = arr.numel - drop.size;
+      if (arr.cols === 1 && arr.rows !== 1) { rows = keep; cols = 1; } else { rows = 1; cols = keep; }
+      if (drop.size === 0) return arr;
+    } else if (args.length === 2) {
+      const [rn, cn] = args;
+      if (cn.type === 'FullColon' || rn.type === 'FullColon') {
+        const byRow = cn.type === 'FullColon';
+        this.endStack.push(byRow ? arr.rows : arr.cols);
+        let idx;
+        try { idx = this.evalExpr(byRow ? rn : cn, scope); } finally { this.endStack.pop(); }
+        const which = new Set(this._resolvePositions(idx, byRow ? arr.rows : arr.cols));
+        for (let c = 0; c < arr.cols; c++) for (let r = 0; r < arr.rows; r++) {
+          if (which.has(byRow ? r : c)) drop.add(c * arr.rows + r);
+        }
+        rows = byRow ? arr.rows - which.size : arr.rows;
+        cols = byRow ? arr.cols : arr.cols - which.size;
+      } else {
+        throw new MatlabError("Deleting elements requires a full ':' on exactly one dimension, e.g. c(:,2) = []");
+      }
+    } else throw new MatlabError('Indexing with more than 2 subscripts is not supported');
+    const data = [];
+    arr.data.forEach((el, k) => {
+      if (!drop.has(k)) data.push(el);
+      else if (arr instanceof Cell) release(el);
+      else for (const v of el.values()) release(v);
+    });
+    arr.data = data; arr.rows = rows; arr.cols = cols;
+    return arr;
+  }
 
   displayAssignTarget(target, scope) {
-    if (target.type === 'Ident') { this.displayValue(target.name, scope.get(target.name)); return; }
-    if (target.type === 'Index') {
-      const name = this._rootIdentName(target.target);
-      this.displayValue(name, scope.get(name));
-    }
+    const name = target.type === 'Ident' ? target.name : this._flattenLValue(target).root;
+    this.displayValue(name, scope.get(name));
   }
 
   // ---------------- expression evaluation ----------------
@@ -350,23 +611,38 @@ export class Interpreter {
       }
       case 'Ident': {
         if (scope.has(node.name)) return [scope.get(node.name)];
-        if (this.funcTable.has(node.name) || this.builtins.has(node.name) || this.files.has(node.name + '.m')) {
+        const locals = this._currentLocals();
+        if ((locals && locals.has(node.name)) || this.funcTable.has(node.name) || this.builtins.has(node.name) || this.files.has(node.name + '.m')) {
           return this.callNamed(node.name, [], nargout, scope);
         }
-        throw new MatlabError(`Undefined variable or function '${node.name}'`);
+        throw new MatlabError(`Undefined variable or function '${node.name}'`, 'MATLAB:UndefinedFunction');
       }
       case 'Paren': return [this.evalExpr(node.expr, scope)];
       case 'Range': return [this.evalRange(node, scope)];
       case 'MatrixLit': return [this.evalMatrixLit(node, scope)];
+      case 'CellLit': return [this.evalCellLit(node, scope)];
       case 'Unary': return [this.evalUnary(node, scope)];
       case 'Binary': return [this.evalBinary(node, scope)];
       case 'Transpose': return [this.evalTranspose(node, scope)];
       case 'AnonFunc': return [this.evalAnonFunc(node, scope)];
       case 'FuncHandle': return [new FunctionHandle({ name: node.name, locals: this._currentLocals() })];
       case 'Field':
-        throw new MatlabError(`Struct field access ('.${node.name}') is not supported — structs aren't implemented. Consider separate variables or a Map-like workaround.`);
-      case 'CellIndex':
-        throw new MatlabError('Cell arrays ({...}) are not supported.');
+      case 'DynField': {
+        // s.name: one value per struct element (a comma-separated list
+        // when s is a struct array).
+        const base = this.evalExpr(node.target, scope);
+        if (!(base instanceof StructArray)) throw new MatlabError('Dot indexing is not supported for variables of this type.');
+        const name = this._fieldName(node.type === 'Field' ? { name: node.name } : { nameExpr: node.nameExpr }, scope);
+        if (!base.hasField(name)) throw new MatlabError(`Unrecognized field name "${name}".`, 'MATLAB:nonExistentField');
+        return base.data.map(el => el.get(name));
+      }
+      case 'CellIndex': {
+        // c{...}: the selected contents, as a comma-separated list.
+        const base = this.evalExpr(node.target, scope);
+        if (!(base instanceof Cell)) throw new MatlabError('Brace indexing is not supported for variables of this type.');
+        return this._readSelection(base, node.args, scope).positions.map(p => base.data[p]);
+      }
+      case 'FullColon': return [Mat.fromString(':')]; // `f(:)` passes the char ':' to a function
       case 'Index': return this.evalIndexOrCall(node, scope, nargout);
       default:
         throw new MatlabError(`Cannot evaluate expression of type ${node.type}`);
@@ -380,17 +656,88 @@ export class Interpreter {
     return colonRange(start, step, stop);
   }
 
-  evalMatrixLit(node, scope) {
-    if (node.rows.length === 0) return Mat.empty();
-    // Evaluate each element (may itself be a matrix, for horzcat/vertcat).
-    const rowMats = node.rows.map(row => row.map(el => this.evalExpr(el, scope)));
-    // Horizontal concat within each row, then vertical concat across rows.
-    const isCharRow = rowMats.map(r => r.length > 0 && r.every(m => m.isChar));
-    const hcatRows = rowMats.map((r, idx) => this.hconcat(r));
-    return this.vconcat(hcatRows);
+  // Evaluates an expression for use as a list item (function argument,
+  // matrix/cell literal element): comma-separated lists like c{:} or
+  // s.field on a struct array expand into several items.
+  evalList(nodes, scope) {
+    const out = [];
+    for (const n of nodes) {
+      if (isCsListNode(n)) out.push(...this.evalForNargout(n, scope, 1));
+      else out.push(this.evalExpr(n, scope));
+    }
+    return out;
   }
 
-  hconcat(mats) {
+  evalMatrixLit(node, scope) {
+    if (node.rows.length === 0) return Mat.empty();
+    // Horizontal concat within each row, then vertical concat across rows.
+    return this.vconcat(node.rows.map(row => this.hconcat(this.evalList(row, scope))));
+  }
+
+  // {a, b; c, d}: every element is wrapped in its own cell (so a cell
+  // element nests rather than concatenating), then rows are joined.
+  evalCellLit(node, scope) {
+    if (node.rows.length === 0) return Cell.empty();
+    const rowCells = node.rows.map(row => this.hconcat(this.evalList(row, scope).map(v => new Cell(1, 1, [v]))));
+    return this.vconcat(rowCells);
+  }
+
+  hconcat(vals) { return this._concat(vals, true); }
+  vconcat(vals) { return this._concat(vals, false); }
+
+  _concat(vals, horizontal) {
+    if (vals.some(v => v instanceof Cell)) {
+      // [c1, c2] joins cells; a non-cell item is wrapped as a 1x1 cell.
+      return this._concatContainers(vals.map(v => v instanceof Cell ? v : new Cell(1, 1, [v])), horizontal);
+    }
+    if (vals.some(v => v instanceof StructArray)) {
+      const items = vals.filter(v => !(v instanceof Mat && v.isEmpty));
+      if (!items.every(v => v instanceof StructArray)) throw new MatlabError('Cannot concatenate a struct with a non-struct value.');
+      return this._concatContainers(items, horizontal);
+    }
+    if (vals.some(v => v instanceof FunctionHandle)) {
+      if (vals.length === 1) return vals[0];
+      throw new MatlabError('Nonscalar arrays of function handles are not allowed; use cell arrays instead.');
+    }
+    return horizontal ? this._hconcatMats(vals) : this._vconcatMats(vals);
+  }
+
+  _concatContainers(arrs, horizontal) {
+    arrs = arrs.filter(a => !(a.rows === 0 && a.cols === 0));
+    const isCell = arrs.length === 0 || arrs[0] instanceof Cell;
+    if (arrs.length === 0) return Cell.empty();
+    if (arrs.length === 1) return arrs[0];
+    const first = arrs[0];
+    if (!isCell) {
+      for (const a of arrs) {
+        const same = a.fieldNames.length === first.fieldNames.length && a.fieldNames.every(f => first.hasField(f));
+        if (!same) throw new MatlabError('Concatenation of structures requires the same field names.');
+      }
+    }
+    let rows, cols;
+    if (horizontal) {
+      rows = first.rows;
+      if (arrs.some(a => a.rows !== rows)) throw new MatlabError('Dimensions of arrays being concatenated are not consistent.');
+      cols = arrs.reduce((n, a) => n + a.cols, 0);
+    } else {
+      cols = first.cols;
+      if (arrs.some(a => a.cols !== cols)) throw new MatlabError('Dimensions of arrays being concatenated are not consistent.');
+      rows = arrs.reduce((n, a) => n + a.rows, 0);
+    }
+    const data = new Array(rows * cols);
+    let off = 0;
+    for (const a of arrs) {
+      for (let c = 0; c < a.cols; c++) for (let r = 0; r < a.rows; r++) {
+        const dst = horizontal ? (off + c) * rows + r : c * rows + off + r;
+        const el = a.data[c * a.rows + r];
+        data[dst] = isCell ? el : new Map(first.fieldNames.map(f => [f, el.get(f)]));
+      }
+      off += horizontal ? a.cols : a.rows;
+    }
+    return isCell ? new Cell(rows, cols, data) : new StructArray(rows, cols, first.fieldNames, data, first.classOverride);
+  }
+
+  _hconcatMats(mats) {
     mats = mats.filter(m => !(m.isEmpty && m.rows === 0 && m.cols === 0));
     if (mats.length === 0) return Mat.empty();
     const rows = mats[0].rows;
@@ -410,12 +757,10 @@ export class Interpreter {
       }
       colOff += m.cols;
     }
-    const allChar = mats.every(m => m.isChar);
-    const allLogical = mats.every(m => m.isLogical);
-    return new Mat(rows, cols, re, im, { isChar: allChar, isLogical: allLogical });
+    return new Mat(rows, cols, re, im, concatClass(mats));
   }
 
-  vconcat(mats) {
+  _vconcatMats(mats) {
     mats = mats.filter(m => !(m.isEmpty && m.rows === 0 && m.cols === 0));
     if (mats.length === 0) return Mat.empty();
     const cols = mats[0].cols;
@@ -435,9 +780,7 @@ export class Interpreter {
       }
       rowOff += m.rows;
     }
-    const allChar = mats.every(m => m.isChar);
-    const allLogical = mats.every(m => m.isLogical);
-    return new Mat(rows, cols, re, im, { isChar: allChar, isLogical: allLogical });
+    return new Mat(rows, cols, re, im, concatClass(mats));
   }
 
   evalUnary(node, scope) {
@@ -458,6 +801,7 @@ export class Interpreter {
 
   evalTranspose(node, scope) {
     const v = this.evalExpr(node.expr, scope);
+    if (v instanceof Cell || v instanceof StructArray) return transposeContainer(v);
     requireMatOperand(v, "'");
     const re = new Float64Array(v.numel);
     const im = v.isComplex ? new Float64Array(v.numel) : null;
@@ -481,7 +825,7 @@ export class Interpreter {
     const free = new Set();
     collectFreeIdents(node.body, paramSet, free);
     for (const name of free) {
-      if (scope.has(name)) closure.set(name, scope.get(name));
+      if (scope.has(name)) closure.set(name, retain(scope.get(name)));
     }
     return new FunctionHandle({ params: node.params, body: node.body, closure, source: node.source ?? null, locals: this._currentLocals() });
   }
@@ -490,15 +834,15 @@ export class Interpreter {
     const op = node.op;
     if (op === '&&') {
       const l = this.evalExpr(node.left, scope);
-      if (!l.isTruthy()) return Mat.logicalScalar(false);
+      if (!this._truthy(l)) return Mat.logicalScalar(false);
       const r = this.evalExpr(node.right, scope);
-      return Mat.logicalScalar(r.isTruthy());
+      return Mat.logicalScalar(this._truthy(r));
     }
     if (op === '||') {
       const l = this.evalExpr(node.left, scope);
-      if (l.isTruthy()) return Mat.logicalScalar(true);
+      if (this._truthy(l)) return Mat.logicalScalar(true);
       const r = this.evalExpr(node.right, scope);
-      return Mat.logicalScalar(r.isTruthy());
+      return Mat.logicalScalar(this._truthy(r));
     }
     const a = this.evalExpr(node.left, scope);
     const b = this.evalExpr(node.right, scope);
@@ -516,21 +860,59 @@ export class Interpreter {
       const name = node.target.name;
       if (scope.has(name)) {
         const base = scope.get(name);
-        if (base instanceof FunctionHandle) {
-          const args = node.args.map(a => this.evalExpr(a, scope));
-          return this.callHandle(base, args, nargout, scope);
-        }
-        return [this.indexRead(base, node.args, scope)];
+        if (base instanceof FunctionHandle) return this.callHandle(base, this.evalList(node.args, scope), nargout, scope);
+        return [this.indexValue(base, node.args, scope)];
       }
-      return this.callNamed(name, node.args.map(a => this.evalExpr(a, scope)), nargout, scope, node.args, scope);
+      return this.callNamed(name, this.evalList(node.args, scope), nargout, scope);
     }
     // Chained call, e.g. handle-returning expression called immediately: g(x)(y)
     const target = this.evalExpr(node.target, scope);
-    if (target instanceof FunctionHandle) {
-      const args = node.args.map(a => this.evalExpr(a, scope));
-      return this.callHandle(target, args, nargout, scope);
+    if (target instanceof FunctionHandle) return this.callHandle(target, this.evalList(node.args, scope), nargout, scope);
+    return [this.indexValue(target, node.args, scope)];
+  }
+
+  // v(...) for any indexable value: a matrix gives a matrix, a cell array
+  // a (sub-)cell array, a struct array a (sub-)struct array.
+  indexValue(base, argNodes, scope) {
+    if (base instanceof Mat) return this.indexRead(base, argNodes, scope);
+    if (base instanceof Cell || base instanceof StructArray) {
+      const sel = this._readSelection(base, argNodes, scope);
+      if (base instanceof Cell) return new Cell(sel.rows, sel.cols, sel.positions.map(p => base.data[p]));
+      return new StructArray(sel.rows, sel.cols, base.fieldNames, sel.positions.map(p => new Map(base.data[p])), base.classOverride);
     }
-    return [this.indexRead(target, node.args, scope)];
+    throw new MatlabError(`Cannot index into a ${valueClassName(base)}`);
+  }
+
+  // Positions (0-based, column-major) selected by a read index into a
+  // cell/struct array, plus the shape of the result.
+  _readSelection(arr, argNodes, scope) {
+    if (argNodes.length === 0) throw new MatlabError('Empty index expression is not supported');
+    if (argNodes.length === 1) {
+      const node = argNodes[0];
+      if (node.type === 'FullColon') return { positions: Array.from({ length: arr.numel }, (_, k) => k), rows: arr.numel, cols: 1 };
+      this.endStack.push(arr.numel);
+      let idx;
+      try { idx = this.evalExpr(node, scope); } finally { this.endStack.pop(); }
+      const positions = this._resolvePositions(idx, arr.numel);
+      for (const p of positions) if (p >= arr.numel) throw new MatlabError(`Index exceeds the number of array elements. Index must not exceed ${arr.numel}.`, 'MATLAB:badsubscript');
+      const [rows, cols] = linearResultShape(arr, idx, positions.length);
+      return { positions, rows, cols };
+    }
+    if (argNodes.length === 2) {
+      this.endStack.push(arr.rows);
+      let rowSel;
+      try { rowSel = this._resolveDimSelector(argNodes[0], scope, arr.rows); } finally { this.endStack.pop(); }
+      this.endStack.push(arr.cols);
+      let colSel;
+      try { colSel = this._resolveDimSelector(argNodes[1], scope, arr.cols); } finally { this.endStack.pop(); }
+      const positions = [];
+      for (const c of colSel) for (const r of rowSel) {
+        if (r >= arr.rows || c >= arr.cols) throw new MatlabError(`Index exceeds array dimensions (size is ${arr.sizeStr()}).`, 'MATLAB:badsubscript');
+        positions.push(c * arr.rows + r);
+      }
+      return { positions, rows: rowSel.length, cols: colSel.length };
+    }
+    throw new MatlabError('Indexing with more than 2 subscripts is not supported (N-D arrays are out of scope)');
   }
 
   callNamed(name, argValues, nargout, callerScope) {
@@ -557,7 +939,7 @@ export class Interpreter {
       this.runProgram(mfile.ast, callerScope || this.workspace);
       return [];
     }
-    throw new MatlabError(`Undefined function '${name}'`);
+    throw new MatlabError(`Undefined function '${name}'`, 'MATLAB:UndefinedFunction');
   }
 
   callHandle(fh, argValues, nargout, callerScope) {
@@ -569,13 +951,15 @@ export class Interpreter {
       if (fh.name) return this.callNamed(fh.name, argValues, nargout, callerScope);
       // anonymous function
       const scope = new Scope(this, { isFunction: true, funcName: '<anonymous>' });
-      for (const [k, v] of fh.closure.entries()) scope.set(k, v);
-      if (argValues.length > fh.params.length) throw new MatlabError('Too many input arguments');
-      fh.params.forEach((p, i) => { if (i < argValues.length) scope.set(p, argValues[i]); });
-      scope.set('nargin', Mat.scalar(argValues.length));
-      // Forward nargout so `[a,b] = f()` works when the body is itself a
-      // multi-output call, e.g. f = @() deal(1,2).
-      return this.evalForNargout(fh.body, scope, nargout);
+      try {
+        for (const [k, v] of fh.closure.entries()) scope.set(k, v);
+        bindParams(scope, fh.params, argValues, 'anonymous function');
+        // Forward nargout so `[a,b] = f()` works when the body is itself a
+        // multi-output call, e.g. f = @() deal(1,2).
+        return this.evalForNargout(fh.body, scope, nargout);
+      } finally {
+        scope.releaseAll();
+      }
     } finally {
       this.localFnStack.pop();
     }
@@ -591,24 +975,33 @@ export class Interpreter {
     this.callDepth++;
     if (this.callDepth > MAX_RECURSION) { this.callDepth--; throw new MatlabError(`Maximum recursion limit of ${MAX_RECURSION} reached`); }
     this.localFnStack.push(def.locals || null);
+    const scope = new Scope(this, { isFunction: true, funcName: def.name });
     try {
-      if (argValues.length > def.params.length) throw new MatlabError(`Too many input arguments to '${def.name}'`);
-      const scope = new Scope(this, { isFunction: true, funcName: def.name });
-      def.params.forEach((p, i) => { if (i < argValues.length) scope.set(p, argValues[i]); });
-      scope.set('nargin', Mat.scalar(argValues.length));
+      bindParams(scope, def.params, argValues, `'${def.name}'`);
       scope.set('nargout', Mat.scalar(Math.max(nargout, 0)));
       try {
         this.execBlock(def.body, scope);
       } catch (e) {
         if (!(e instanceof ReturnSignal)) throw e;
       }
+      // A trailing `varargout` output (a cell) supplies any remaining outputs.
+      const outs = def.outputs;
+      const hasVarargout = outs.length > 0 && outs[outs.length - 1] === 'varargout';
+      const fixed = hasVarargout ? outs.slice(0, -1) : outs;
       const outputs = [];
-      for (const outName of def.outputs) {
+      for (const outName of fixed) {
         if (scope.vars.has(outName)) outputs.push(scope.vars.get(outName));
         else break; // later outputs simply not requested/assigned
       }
-      if (outputs.length < Math.min(Math.max(nargout, 1), def.outputs.length) && nargout >= 1) {
-        throw new MatlabError(`Output argument '${def.outputs[outputs.length]}' was not assigned during the call to '${def.name}'`);
+      if (hasVarargout && outputs.length === fixed.length && scope.vars.has('varargout')) {
+        const vo = scope.vars.get('varargout');
+        if (!(vo instanceof Cell)) throw new MatlabError('varargout must be a cell array');
+        outputs.push(...vo.data);
+      }
+      const required = Math.max(nargout, 1);
+      if (nargout >= 1 && outputs.length < required && (outputs.length < fixed.length || hasVarargout)) {
+        const missing = outputs.length < fixed.length ? fixed[outputs.length] : 'varargout';
+        throw new MatlabError(`Output argument '${missing}' was not assigned during the call to '${def.name}'`);
       }
       return outputs;
     } catch (e) {
@@ -618,6 +1011,7 @@ export class Interpreter {
       if (e instanceof RangeError) throw new MatlabError(`Maximum recursion depth exceeded in '${def.name}' (out of JavaScript stack space)`);
       throw e;
     } finally {
+      scope.releaseAll();
       this.localFnStack.pop();
       this.callDepth--;
     }
@@ -634,7 +1028,7 @@ export class Interpreter {
   // ---- indexing (read) ----
 
   indexRead(mat, argNodes, scope) {
-    if (!(mat instanceof Mat)) throw new MatlabError('Cannot index into this value');
+    if (!(mat instanceof Mat)) return this.indexValue(mat, argNodes, scope);
     if (argNodes.length === 0) throw new MatlabError('Empty index expression is not supported');
     if (argNodes.length === 1) return this.indexReadLinear(mat, argNodes[0], scope);
     if (argNodes.length === 2) return this.indexRead2D(mat, argNodes[0], argNodes[1], scope);
@@ -655,20 +1049,11 @@ export class Interpreter {
     const im = mat.isComplex ? new Float64Array(positions.length) : null;
     for (let k = 0; k < positions.length; k++) {
       const p = positions[k];
-      if (p < 0 || p >= mat.numel) throw new MatlabError(`Index (${p + 1}) out of bounds (numel=${mat.numel})`);
+      if (p < 0 || p >= mat.numel) throw new MatlabError(`Index (${p + 1}) out of bounds (numel=${mat.numel})`, 'MATLAB:badsubscript');
       re[k] = mat.re[p];
       if (im) im[k] = mat.im[p];
     }
-    let rows, cols;
-    if (mat.isVector && mat.numel !== 1) {
-      if (mat.rows === 1) { rows = 1; cols = positions.length; }
-      else { rows = positions.length; cols = 1; }
-    } else if (idxMat.isVector) {
-      if (idxMat.rows === 1) { rows = 1; cols = positions.length; }
-      else { rows = positions.length; cols = 1; }
-    } else {
-      rows = idxMat.rows; cols = idxMat.cols;
-    }
+    const [rows, cols] = linearResultShape(mat, idxMat, positions.length);
     return new Mat(rows, cols, re, im, { isChar: mat.isChar, isLogical: mat.isLogical });
   }
 
@@ -686,7 +1071,7 @@ export class Interpreter {
       for (let r = 0; r < rows; r++) {
         const rr = rowSel[r], cc = colSel[c];
         if (rr < 0 || rr >= mat.rows || cc < 0 || cc >= mat.cols) {
-          throw new MatlabError(`Index out of bounds (size is ${mat.sizeStr()})`);
+          throw new MatlabError(`Index out of bounds (size is ${mat.sizeStr()})`, 'MATLAB:badsubscript');
         }
         const src = cc * mat.rows + rr, dst = c * rows + r;
         re[dst] = mat.re[src];
@@ -711,7 +1096,7 @@ export class Interpreter {
     const positions = [];
     for (let k = 0; k < idxMat.numel; k++) {
       const v = idxMat.re[k];
-      if (!Number.isInteger(v) || v < 1) throw new MatlabError(`Array indices must be positive integers (got ${v})`);
+      if (!Number.isInteger(v) || v < 1) throw new MatlabError(`Array indices must be positive integers or logical values (got ${v})`, 'MATLAB:badsubscript');
       positions.push(v - 1);
     }
     return positions;
@@ -882,12 +1267,63 @@ export class Interpreter {
 // case is caught and reported in callUserFunction.
 const MAX_RECURSION = 500;
 
-function className(v) { return v instanceof FunctionHandle ? 'function_handle' : (v && v.className ? v.className() : 'value'); }
-
 function requireMatOperand(v, op) {
   if (!(v instanceof Mat)) {
-    throw new MatlabError(`Operator '${op}' is not supported for operands of type '${className(v)}'`);
+    throw new MatlabError(`Operator '${op}' is not supported for operands of type '${valueClassName(v)}'`);
   }
+}
+
+export function transposeContainer(v) {
+  const data = new Array(v.numel);
+  for (let r = 0; r < v.rows; r++) for (let c = 0; c < v.cols; c++) {
+    const el = v.data[c * v.rows + r];
+    data[r * v.cols + c] = v instanceof Cell ? el : new Map(el);
+  }
+  return v instanceof Cell ? new Cell(v.cols, v.rows, data) : new StructArray(v.cols, v.rows, v.fieldNames, data, v.classOverride);
+}
+
+// Nodes whose value is a comma-separated list (zero or more values).
+function isCsListNode(node) {
+  return node.type === 'CellIndex' || node.type === 'Field' || node.type === 'DynField';
+}
+
+// Class of a matrix concatenation: char wins (['abc' 10] is a char row),
+// logical only if every piece is logical, otherwise double.
+function concatClass(mats) {
+  return { isChar: mats.some(m => m.isChar), isLogical: mats.length > 0 && mats.every(m => m.isLogical) };
+}
+
+// Shape of A(idx) for a single (linear) index: a logical mask gives a
+// column (or a row, for a row vector A); for a vector A the result keeps
+// A's orientation; otherwise it takes the index's shape.
+function linearResultShape(arr, idx, n) {
+  if (idx.isLogical) return arr.rows === 1 && arr.numel !== 1 ? [1, n] : (idx.rows === 1 && arr.numel === 1 ? [1, n] : [n, 1]);
+  if (arr.isVector && arr.numel !== 1) return arr.rows === 1 ? [1, n] : [n, 1];
+  if (idx.isVector) return idx.rows === 1 ? [1, n] : [n, 1];
+  return [idx.rows, idx.cols];
+}
+
+// Binds call arguments to parameter names, collecting extras into a
+// trailing `varargin` cell, and sets nargin.
+function bindParams(scope, params, args, what) {
+  const hasVarargin = params.length > 0 && params[params.length - 1] === 'varargin';
+  const fixed = hasVarargin ? params.length - 1 : params.length;
+  if (args.length > fixed && !hasVarargin) throw new MatlabError(`Too many input arguments to ${what}`);
+  for (let i = 0; i < Math.min(fixed, args.length); i++) scope.set(params[i], args[i]);
+  if (hasVarargin) {
+    const extra = args.slice(fixed);
+    scope.set('varargin', new Cell(1, extra.length, extra));
+  }
+  scope.set('nargin', Mat.scalar(args.length));
+}
+
+// Any error thrown while running user code, as a MatlabError (so try/catch
+// and the console can report it uniformly).
+export function toMatlabError(e) {
+  if (e instanceof MatlabError) return e;
+  if (e instanceof RangeError) return new MatlabError('Maximum recursion depth exceeded (out of JavaScript stack space)', 'MATLAB:recursionLimit');
+  if (e && (e.name === 'ParseError' || e.name === 'LexError')) return new MatlabError(e.message, 'MATLAB:parse');
+  return new MatlabError(e && e.message ? e.message : String(e));
 }
 
 // ---------------- free binary operator dispatch ----------------
@@ -1023,7 +1459,53 @@ function collectFreeIdents(node, bound, out) {
 
 export function formatValue(val) {
   if (val instanceof FunctionHandle) return `  function_handle with value:\n\n    ${val.displayName()}`;
+  if (val instanceof Cell) return formatCell(val);
+  if (val instanceof StructArray) return formatStruct(val);
   return formatMat(val);
+}
+
+// One-line summary of a value, as shown inside a cell or struct display.
+// `bracket` wraps numeric arrays: [1 2 3] in struct fields, {[1 2 3]} in cells.
+function summarizeValue(v, inCell) {
+  if (v instanceof FunctionHandle) return v.displayName();
+  if (v instanceof Cell) return inCell ? `${v.sizeStr()} cell` : `{${v.sizeStr()} cell}`;
+  if (v instanceof StructArray) return inCell ? `${v.sizeStr()} ${v.className()}` : `[${v.sizeStr()} ${v.className()}]`;
+  if (v.isChar && v.rows === 1) return `'${v.toJSString()}'`;
+  const cls = v.className();
+  if (v.isEmpty) return inCell ? `${v.sizeStr()} ${cls}` : '[]';
+  if (v.rows === 1 && v.numel <= 10 && !v.isComplex) {
+    const allInt = Array.from(v.re).every(x => !Number.isFinite(x) || Number.isInteger(x));
+    const parts = Array.from(v.re, x => fmtSpecial(x) ?? (allInt ? String(x) : (Math.abs(x) >= 1e-3 && Math.abs(x) < 1e3 ? x.toFixed(4) : fmtExp(x))));
+    const body = parts.join(' ');
+    return v.numel === 1 && !inCell ? body : `[${body}]`;
+  }
+  if (v.numel === 1) return formatMat(v).trim();
+  return inCell ? `${v.sizeStr()} ${cls}` : `[${v.sizeStr()} ${cls}]`;
+}
+
+function formatCell(c) {
+  if (c.isEmpty) return `  ${c.sizeStr()} empty cell array`;
+  const cells = [];
+  for (let r = 0; r < c.rows; r++) {
+    const row = [];
+    for (let k = 0; k < c.cols; k++) row.push(`{${summarizeValue(c.data[k * c.rows + r], true)}}`);
+    cells.push(row);
+  }
+  const widths = Array.from({ length: c.cols }, (_, k) => Math.max(...cells.map(row => row[k].length)));
+  return `  ${c.sizeStr()} cell array\n\n` + cells.map(row => '    ' + row.map((x, k) => x.padEnd(widths[k])).join('    ').trimEnd()).join('\n');
+}
+
+function formatStruct(s) {
+  const cls = s.className();
+  if (s.numel === 1) {
+    if (s.fieldNames.length === 0) return `  ${cls} with no fields.`;
+    const w = Math.max(...s.fieldNames.map(f => f.length));
+    const head = s.classOverride ? `  ${cls} with properties:` : '  struct with fields:';
+    return head + '\n\n' + s.fieldNames.map(f => `    ${f.padStart(w)}: ${summarizeValue(s.data[0].get(f), false)}`).join('\n');
+  }
+  const head = s.isEmpty ? `  ${s.sizeStr()} empty ${cls} array` : `  ${s.sizeStr()} ${cls} array`;
+  if (s.fieldNames.length === 0) return `${head} with no fields.`;
+  return `${head} with fields:\n\n` + s.fieldNames.map(f => `    ${f}`).join('\n');
 }
 
 export function formatMat(mat) {

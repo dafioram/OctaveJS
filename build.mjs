@@ -17,6 +17,19 @@ await esbuild.build({
   logLevel: 'info',
 });
 
+// The interpreter's Web Worker (see src/ui/backend.js). A classic (iife)
+// worker script, so it loads in every browser that supports workers.
+await esbuild.build({
+  entryPoints: ['src/worker/worker.js'],
+  bundle: true,
+  outfile: 'dist/worker.js',
+  format: 'iife',
+  target: ['es2020'],
+  minify: true,
+  sourcemap: false,
+  logLevel: 'info',
+});
+
 copyFileSync('public/index.html', 'dist/index.html');
 copyFileSync('public/favicon.svg', 'dist/favicon.svg');
 copyFileSync('public/favicon.ico', 'dist/favicon.ico');
