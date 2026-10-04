@@ -165,7 +165,11 @@ export function createSession(post, { snapshots = true } = {}) {
       }
       case 'closeFigure': {
         if (interp.figures) interp.figures.delete(msg.num);
-        if (!interp.figures || interp.figures.size === 0) interp.figureState.current = undefined;
+        if (!interp.figures || !interp.figures.has(interp.figureState.current)) {
+          // As in MATLAB, closing the current figure makes another one current.
+          const remaining = interp.figures ? [...interp.figures.keys()] : [];
+          interp.figureState.current = remaining.length ? Math.max(...remaining) : undefined;
+        }
         postWorkspace();
         return;
       }

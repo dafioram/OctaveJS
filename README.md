@@ -131,14 +131,27 @@ struct arrays), `fieldnames`, `isfield`, `rmfield`, `isstruct`,
 `throw`/`rethrow`, `getReport`. Built-in errors carry identifiers such as
 `MATLAB:UndefinedFunction` and `MATLAB:badsubscript`.
 
-**Plotting:** `plot` (with inline linespec strings like `'r--'` or
-`'b-o'`), `scatter`, `bar`, `histogram`, `hist` (the classic MATLAB
-function — plots when called with no output arguments, returns
-`[counts, centers]` otherwise; `histogram` is the more robust,
-Plotly-native-binned modern equivalent), `figure`, `hold`, `xlabel`/
-`ylabel`/`title`, `legend`, `grid`, `xlim`/`ylim`, `axis('equal'|'tight'|
-[xmin xmax ymin ymax])`. Each figure's tab in the Figures panel has a
-&times; to close it.
+**Plotting:** `plot` (a matrix gives one line per column; line specs
+like `'r--o'`; Name,Value options `Color`, `LineWidth`, `LineStyle`,
+`Marker`, `MarkerSize`, `MarkerFaceColor`, `MarkerEdgeColor`,
+`DisplayName`), `semilogx`/`semilogy`/`loglog`, `stairs`, `stem`,
+`errorbar`, `scatter` (sizes, per-point colors, `'filled'`), `bar`/`barh`
+(grouped or `'stacked'`), `histogram` (bin count/edges/width,
+`Normalization`), `hist` (the classic function — plots with no output
+arguments, returns `[counts, centers]` otherwise), `area`, `fill`, `pie`,
+`polarplot`, `text`. Figures and axes: `figure` (with `'Name'`), `subplot`
+(including spanning `subplot(2,2,[1 2])`), `sgtitle`, `hold`, `ishold`,
+`gcf`, `gca`, `clf`, `close`/`close all`; `title` (with subtitle),
+`xlabel`, `ylabel`, `legend` (labels, `DisplayName`, `'Location'`,
+`show`/`off`), `grid on|off|minor`, `box`, `xlim`/`ylim`, `axis` (limits,
+`equal`, `tight`, `ij`, `off`, ...), `xticks`/`yticks`,
+`xticklabels`/`yticklabels`. Lines use MATLAB's color order, and
+titles/labels/legends/text understand MATLAB's TeX subset (`x^2`,
+`x_{i}`, `\alpha`). Plotting functions return handles: `set`/`get` cover
+the common line properties (including `XData`/`YData`), axes `XLim`/
+`YLim`/`XScale`/`YScale`/`XGrid`/`YGrid`/`Box` and the figure `Name`;
+`isgraphics` checks a handle. Each figure's tab in the Figures panel has
+a &times; to close it.
 
 **I/O:** `readmatrix`/`writematrix` (CSV), `save`/`load` (a real MAT5
 `.mat` writer/reader — see below), `run('script.m')`, and calling a script
@@ -158,11 +171,12 @@ there's a reasonable workaround, it's listed.
 | Not supported | Use instead |
 |---|---|
 | Double-quoted strings (`"hello"`, MATLAB string arrays) | Single-quoted char arrays: `'hello'` |
-| **General command syntax** for arbitrary/user-defined functions, e.g. calling your own `function foo(s)` as `foo bar` | Use the normal parenthesized form: `foo('bar')`. A small, fixed whitelist — `clear`, `hold`, `grid`, `axis`, `disp`, `format` — *does* support command syntax (`clear x y`, `hold on`, `grid off`, `axis equal`, `disp hello`, `format long`), since those are idiomatic and unambiguous enough to special-case safely; see the note below the table. |
+| **General command syntax** for arbitrary/user-defined functions, e.g. calling your own `function foo(s)` as `foo bar` | Use the normal parenthesized form: `foo('bar')`. A small, fixed whitelist — `clear`, `hold`, `grid`, `axis`, `disp`, `format`, `box`, `legend`, `close`, `warning`, `xlim`, `ylim` — *does* support command syntax (`clear x y`, `hold on`, `grid off`, `axis equal`, `disp hello`, `format long`, `close all`, `legend off`), since those are idiomatic and unambiguous enough to special-case safely; see the note below the table. |
 | N-D arrays (more than 2 subscripts) | Reshape/index a 2-D matrix, or use multiple 2-D matrices |
 | Integer classes (`int8`, `uint16`, ...) — everything is `double` (or tagged `logical`/`char`) | Just use `double`; a trailing class-name argument to `zeros`/`ones` (e.g. `zeros(3,'int8')`) is silently ignored |
 | `()` followed by more indexing in an assignment, e.g. `x(2)(3) = 1` (MATLAB rejects this too; `s(2).f = 1` and `c{2}(3) = 1` *are* supported) | Use an intermediate variable |
-| Name-Value pairs to `plot`, e.g. `plot(x,y,'LineWidth',2)` | Inline linespec strings only, e.g. `plot(x,y,'r--')` |
+| 3-D plots (`plot3`, `surf`, `mesh`, `contour`), images (`imagesc`), `colormap`/`colorbar`, saving figures, `drawnow` animation | Coming in the next plotting update; use 2-D plots for now |
+| Full handle graphics (every property, `delete`, `findobj`, `uicontrol`, ...) | The `set`/`get` properties listed above; `axis square` is accepted but has no effect |
 | Complex-matrix `rank`/`svd` | `rank(real(A))` as an approximation, or avoid complex inputs |
 | Saving cell arrays or structs to `.mat` | They're skipped with a note; save their numeric contents as separate variables |
 | `classdef` classes, `containers.Map`, tables | Structs and cell arrays |
@@ -173,9 +187,8 @@ parse time, whether `foo` is *currently* a variable in the workspace —
 which makes MATLAB's grammar depend on runtime state, not just the text
 being parsed. This app keeps parsing a pure, one-time, stateless step
 (the parser never sees the interpreter's variables), so replicating that
-general rule isn't a good fit architecturally. Instead, `clear`, `hold`,
-`grid`, `axis`, `disp` and `format` are recognized by name directly in
-the parser: when one of those words is immediately followed by a bareword on the
+general rule isn't a good fit architecturally. Instead, `clear`, `hold`, `grid`, `axis`, `disp`, `format`, `box`, `legend`, `close`, `warning`, `xlim`, `ylim`
+are recognized by name directly in the parser: when one of those words is immediately followed by a bareword on the
 same line, it's rewritten to the equivalent parenthesized call before
 anything else happens — so `hold on` and `hold('on')` produce the exact
 same result. This covers the cases people actually reach for command
@@ -257,15 +270,18 @@ src/builtins/   elementwise.js, reduction.js, linalg.js, fft.js,
                 logic.js, mathext.js, strings.js, index.js — the
                 function library, registered into the interpreter.
 src/mat5/       mat5.js — the MAT5 binary codec.
+src/plot/       style.js (MATLAB color order, colors, line specs) and
+                toPlotly.js (the figure model -> Plotly traces/layout);
+                no DOM, so plotting is tested under Node.
 src/worker/     session.js — the interpreter side of the page <-> worker
                 message protocol (no DOM, tested under Node);
                 worker.js — the Web Worker entry point.
 src/ui/         main.js, backend.js, vfs.js, matlab-lang.js, styles.css
                 — the browser app: DOM wiring, the worker (or in-page
                   fallback) backend, the IndexedDB file store, CodeMirror
-                  setup, Plotly glue. Everything here is what actually
+                  setup, drawing figures with Plotly. Everything here is what actually
                   needs a browser; everything above it is plain, testable JS.
-test/           harness.js + six test files — run with `npm test`.
+test/           harness.js + seven test files — run with `npm test`.
 build.mjs       esbuild bundling script -> dist/ (main.js and worker.js).
 ```
 
@@ -359,4 +375,4 @@ workspace in the page's memory.
   features this app never invokes (basemap tile URLs for map-type charts,
   a WebGL support-check link) — they're just unused code in the bundle,
   not something that gets fetched; the app is fully usable offline for
-  everything it actually exposes (line/scatter/bar/histogram plots).
+  everything it actually exposes.

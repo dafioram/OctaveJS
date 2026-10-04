@@ -150,7 +150,10 @@ export function tokenize(source) {
     if (/[0-9]/.test(c) || (c === '.' && /[0-9]/.test(peekCh(1) || ''))) {
       let s = '';
       while (/[0-9]/.test(peekCh() || '')) s += advance();
-      if (peekCh() === '.' && !(peekCh(1) === '.' && peekCh(2) === '.')) {
+      // A '.' after the digits is a decimal point — unless it starts an
+      // element-wise operator (2.^x, 3.*y, 4./z, 5.\w, 6.') or '...'.
+      const opAfterDot = peekCh(1) !== undefined && "*/\\^'".includes(peekCh(1));
+      if (peekCh() === '.' && !opAfterDot && !(peekCh(1) === '.' && peekCh(2) === '.')) {
         s += advance();
         while (/[0-9]/.test(peekCh() || '')) s += advance();
       }

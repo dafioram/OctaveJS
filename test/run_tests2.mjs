@@ -1,4 +1,5 @@
 import { makeInterp, fmtVar } from './harness.js';
+import { figureToPlotly } from '../src/plot/toPlotly.js';
 
 let pass = 0, fail = 0;
 function check(label, actual, expected) {
@@ -53,20 +54,24 @@ function checkThrowsMsg(label, fn, substr) {
 // ---------------- plotting (mock host records calls) ----------------
 {
   const { interp, run } = makeInterp();
-  let lastTraces = null, lastLayout = null;
-  interp.host.figures.render = (num, traces, layout) => { lastTraces = traces; lastLayout = layout; };
+  let rendered = 0;
+  interp.host.figures.render = () => { rendered++; };
+  const plotly = () => figureToPlotly(interp.figures.get(interp.figureState.current));
   run("x = 0:0.1:1; plot(x, x.^2, 'r--'); xlabel('x'); ylabel('y'); title('demo');");
-  check('plot produced one trace', lastTraces.length, 1);
-  check('plot linespec color parsed', lastTraces[0].line.color, '#d62728');
-  check('plot linespec dash parsed', lastTraces[0].line.dash, 'dash');
-  check('xlabel set', lastLayout.xaxis.title.text, 'x');
-  check('title set', lastLayout.title.text, 'demo');
+  let { data, layout } = plotly();
+  check('host told to render', rendered > 0, true);
+  check('plot produced one trace', data.length, 1);
+  check('plot linespec color parsed', data[0].line.color, 'rgb(255,0,0)');
+  check('plot linespec dash parsed', data[0].line.dash, 'dash');
+  check('xlabel set', layout.xaxis.title.text, 'x');
+  check('title set', layout.annotations[0].text, '<b>demo</b>');
 
   run("hold('on'); scatter(x, x);");
-  check('hold on keeps previous trace, adds new one', lastTraces.length, 2);
+  check('hold on keeps previous trace, adds new one', plotly().data.length, 2);
   run("hold('off'); bar([1 2 3]);");
-  check('hold off replaces traces', lastTraces.length, 1);
-  check('bar trace type', lastTraces[0].type, 'bar');
+  ({ data } = plotly());
+  check('hold off replaces traces', data.length, 1);
+  check('bar trace type', data[0].type, 'bar');
 }
 
 // ---------------- CSV I/O via virtual file store ----------------

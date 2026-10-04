@@ -1,4 +1,5 @@
 import { makeInterp, fmtVar } from './harness.js';
+import { figureToPlotly } from '../src/plot/toPlotly.js';
 
 let pass = 0, fail = 0;
 function check(label, actual, expected) {
@@ -195,11 +196,12 @@ function checkClose(label, actual, expected, tol = 1e-6) {
   // throw and produce the same effect as their parenthesized form.
   run("plot(1:3, [1 2 3]); hold on; plot(1:3, [3 2 1]);");
   const fig = interp.figures.get(interp.figureState.current);
-  check('hold on (command syntax) enabled hold', fig.hold, true);
+  check('hold on (command syntax) enabled hold', fig.axes[0].hold, true);
+  check('hold on kept both lines', fig.axes[0].objects.length, 2);
   run("grid on;");
-  check('grid on (command syntax) set showgrid', fig.layout.xaxis.showgrid, true);
+  check('grid on (command syntax) set showgrid', figureToPlotly(fig).layout.xaxis.showgrid, true);
   run("axis equal;");
-  check('axis equal (command syntax) set scaleanchor', fig.layout.yaxis.scaleanchor, 'x');
+  check('axis equal (command syntax) set scaleanchor', figureToPlotly(fig).layout.yaxis.scaleanchor, 'x');
 }
 {
   // Regression: normal (non-command) usage of these exact identifiers is

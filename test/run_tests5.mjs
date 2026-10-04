@@ -287,7 +287,7 @@ const show = (h, src) => { h.clearOutput(); h.run(src); return h.getOutput(); };
   s2.handle({ type: 'run', id: 2, src: 'plot(1:3)' });
   const figs = [...msgs2].reverse().find(m => m.type === 'done').figures;
   check('figures touched by a command are sent', figs.map(f => f.num), [1]);
-  check('figure payload carries traces', figs[0].fig.traces.length, 1);
+  check('figure payload carries the plotted line', figs[0].fig.axes[0].objects.length, 1);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
