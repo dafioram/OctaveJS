@@ -47,6 +47,9 @@ const BUILTIN_HINTS = new Set([
   'diff', 'trapz', 'cumtrapz', 'circshift', 'kron', 'nnz', 'sub2ind', 'ind2sub', 'mode',
   'factorial', 'nchoosek', 'primes', 'isprime', 'gcd', 'lcm', 'roots', 'conv', 'deconv', 'filter',
   'strcat', 'strfind', 'contains', 'startsWith', 'endsWith', 'regexp', 'regexpi', 'regexprep', 'int2str',
+  'gcf', 'gca', 'clf', 'close', 'subplot', 'sgtitle', 'ishold', 'semilogx', 'semilogy', 'loglog',
+  'stairs', 'stem', 'errorbar', 'polarplot', 'barh', 'area', 'fill', 'pie', 'text', 'box',
+  'xticks', 'yticks', 'xticklabels', 'yticklabels', 'set', 'get', 'isgraphics',
 ]);
 
 function endsValue(prev) {

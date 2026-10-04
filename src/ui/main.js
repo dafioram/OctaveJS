@@ -20,6 +20,7 @@ import { bracketMatching, indentOnInput } from '@codemirror/language';
 import { closeBrackets, closeBracketsKeymap, autocompletion, completeFromList, completionKeymap } from '@codemirror/autocomplete';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { matlabLanguageSupport, matlabHighlighting, matlabCompletionWords } from './matlab-lang.js';
+import { figureToPlotly } from '../plot/toPlotly.js';
 
 const consoleOutputEl = document.getElementById('console-output');
 const consoleInputEl = document.getElementById('console-input');
@@ -183,8 +184,9 @@ let activeFigureNum = null;
 function showFigures(entries) {
   const drawn = [];
   for (const { num, fig } of entries) {
-    if (!fig) continue;
-    renderFigure(num, fig.traces, fig.layout);
+    // A figure the session reports as gone was closed by code (close, close all).
+    if (!fig) { if (figurePlotDivs.has(num)) closeFigure(num, { notifySession: false }); continue; }
+    renderFigure(num, fig);
     drawn.push(num);
   }
   if (drawn.length === 0) return;
@@ -199,7 +201,11 @@ function showFigures(entries) {
   showNext();
 }
 
-function renderFigure(figNum, traces, layout) {
+const figureNames = new Map(); // figNum -> figure('Name', ...) title, if any
+
+function renderFigure(figNum, fig) {
+  const { data, layout } = figureToPlotly(fig);
+  figureNames.set(figNum, fig.name || '');
   if (!figurePlotDivs.has(figNum)) {
     const div = document.createElement('div');
     div.className = 'figure-plot';
@@ -211,11 +217,10 @@ function renderFigure(figNum, traces, layout) {
   }
   const div = figurePlotDivs.get(figNum);
   const plotlyLayout = Object.assign({
-    margin: { t: layout.title ? 40 : 20, r: 20, b: 45, l: 55 },
-    paper_bgcolor: '#fffdf9', plot_bgcolor: '#fffdf9',
+    paper_bgcolor: '#fffdf9', plot_bgcolor: '#ffffff',
     font: { family: 'ui-monospace, SFMono-Regular, Menlo, monospace', size: 12, color: '#2b2822' },
   }, layout);
-  Plotly.react(div, traces, plotlyLayout, { responsive: true, displaylogo: false });
+  Plotly.react(div, data, plotlyLayout, { responsive: true, displaylogo: false });
   if (activeFigureNum === null) switchFigureTab(figNum);
   else rebuildFigureTabStrip();
 }
@@ -227,7 +232,7 @@ function rebuildFigureTabStrip() {
     tab.className = 'figure-tab' + (figNum === activeFigureNum ? ' active' : '');
     const label = document.createElement('span');
     label.className = 'figure-tab-label';
-    label.textContent = `Figure ${figNum}`;
+    label.textContent = figureNames.get(figNum) ? `Figure ${figNum}: ${figureNames.get(figNum)}` : `Figure ${figNum}`;
     label.onclick = () => switchFigureTab(figNum);
     const closeBtn = document.createElement('button');
     closeBtn.className = 'figure-tab-close';
@@ -255,15 +260,16 @@ function switchFigureTab(figNum) {
   });
 }
 
-function closeFigure(figNum) {
+function closeFigure(figNum, { notifySession = true } = {}) {
   const div = figurePlotDivs.get(figNum);
   if (div) {
     try { Plotly.purge(div); } catch (e) { /* ignore */ }
     div.remove();
     figurePlotDivs.delete(figNum);
   }
+  figureNames.delete(figNum);
   mirror.figures.delete(figNum);
-  backend.send({ type: 'closeFigure', num: figNum });
+  if (notifySession) backend.send({ type: 'closeFigure', num: figNum });
   if (figurePlotDivs.size === 0) {
     activeFigureNum = null;
     figureMountEl.innerHTML = '<div class="figure-empty">No figures yet — try <code>plot(1:10, sin(1:10))</code> in the Command Window.</div>';
@@ -821,10 +827,10 @@ function showHelpModal() {
     <p><strong>Errors:</strong> error, warning, assert, MException, throw/rethrow, getReport.</p>
     <p><strong>Strings:</strong> strcmp/strcmpi, upper/lower, strtrim, strrep, strsplit, strjoin, strcat, strfind, contains/startsWith/endsWith, regexp/regexpi/regexprep, str2double, str2num, sprintf, num2str, int2str.</p>
     <p><strong>Timing &amp; display:</strong> tic/toc, <code>format long</code> / <code>format short</code>.</p>
-    <p><strong>Plotting:</strong> plot, scatter, bar, histogram, hist, figure, hold, xlabel/ylabel/title, legend, grid, xlim/ylim, axis.</p>
+    <p><strong>Plotting:</strong> plot (line specs and Name,Value options), semilogx/semilogy/loglog, stairs, stem, errorbar, scatter, bar/barh, histogram, hist, area, fill, pie, polarplot, text; figure, subplot, sgtitle, hold, gcf/gca, clf, close; title/xlabel/ylabel, legend, grid, box, xlim/ylim, axis, xticks/xticklabels; set/get on handles.</p>
     <p><strong>Files:</strong> scripts and data live in the <em>Files</em> sidebar tab and are saved in this browser. Drag files onto the page to add them. <code>save</code>/<code>writematrix</code> write there too; use the &#x2913; button to download a file.</p>
     <p><strong>Console:</strong> commands run in the background — press <em>Stop</em> (or Ctrl+C in the command line) to interrupt one; the workspace returns to its state before that command. <code>clc</code> clears the window, <code>help('name')</code> shows syntax.</p>
-    <p><strong>Not supported:</strong> string arrays (double-quoted), N-D arrays, integer classes, classdef. Command syntax (bareword args) works for <code>clear</code>, <code>hold</code>, <code>grid</code>, <code>axis</code>, <code>disp</code>, <code>format</code> only. Full list in the README.</p>
+    <p><strong>Not supported:</strong> string arrays (double-quoted), N-D arrays, integer classes, classdef. Command syntax (bareword args) works for <code>clear</code>, <code>hold</code>, <code>grid</code>, <code>axis</code>, <code>disp</code>, <code>format</code>, <code>box</code>, <code>legend</code>, <code>close</code>, <code>warning</code>, <code>xlim</code>, <code>ylim</code> only. Full list in the README.</p>
   `;
   openModal();
 }

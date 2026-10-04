@@ -9,8 +9,10 @@
 - `src/core/` and `src/builtins/` must stay free of DOM/browser APIs so
   the interpreter runs under Node for the test suite; browser-only code
   belongs in `src/ui/`.
-- `src/worker/` (the interpreter session behind the Web Worker) must also
-  stay DOM-free; `test/run_tests5.mjs` drives its message protocol.
+- `src/worker/` (the interpreter session behind the Web Worker) and
+  `src/plot/` (figure model -> Plotly conversion) must also stay DOM-free;
+  `test/run_tests5.mjs` drives the worker protocol and
+  `test/run_tests7.mjs` covers plotting (model and Plotly output).
 - New MATLAB-compatibility fixes get a regression test in
   `test/run_tests4.mjs`; tests for language features go in
   `test/run_tests5.mjs` and for library functions in `test/run_tests6.mjs`

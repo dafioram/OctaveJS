@@ -203,5 +203,14 @@ const isLogical = (interp, name) => interp.workspace.get(name).isLogical;
   check('scale factor', show('x = [1 1000.5]'), 'x =\n   1.0e+03 *\n\n   0.0010   1.0005\n');
 }
 
+// ---- number followed by an element-wise operator ----
+{
+  const { interp, run } = makeInterp();
+  run("a = 10.^(1:3); b = 2.*[1 2]; c = 6./[2 3]; d = 2.\\[4 8]; e = [1 2].^2; f = 3.'; g = 1.5.^2;");
+  check('10.^v is element-wise power', fmtVar(interp, 'a'), { rows: 1, cols: 3, re: [10, 100, 1000], im: null });
+  check('2.*v, 6./v, 2.\\v', [fmtVar(interp, 'b').re, fmtVar(interp, 'c').re, fmtVar(interp, 'd').re], [[2, 4], [3, 2], [2, 4]]);
+  check("3.' and 1.5.^2", [fmtVar(interp, 'f'), fmtVar(interp, 'g')], [3, 2.25]);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
