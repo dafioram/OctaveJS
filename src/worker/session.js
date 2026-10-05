@@ -29,6 +29,7 @@
 import { Interpreter, formatValue, toMatlabError } from '../core/interpreter.js';
 import { buildBuiltinsRegistry } from '../builtins/index.js';
 import { Mat, FunctionHandle, serializeValue, deserializeValue, retain, valueClassName } from '../core/values.js';
+import { generatorOf } from '../builtins/random.js';
 
 const VIEWER_MAX_ELEMENTS = 2000;
 
@@ -121,7 +122,10 @@ export function createSession(post, { snapshots = true } = {}) {
   // tic stopwatch, and warning on/off state.
   function settingsOf() {
     const w = interp.warningState;
-    return { displayFormat: interp.displayFormat, ticTime: interp.ticTime, warnings: w ? { all: w.all, off: [...w.off] } : null };
+    return {
+      displayFormat: interp.displayFormat, ticTime: interp.ticTime, warnings: w ? { all: w.all, off: [...w.off] } : null,
+      rng: interp.rng ? { seed: interp.rng.seedValue, state: interp.rng.getState() } : null,
+    };
   }
 
   function restore(snap) {
@@ -139,6 +143,11 @@ export function createSession(post, { snapshots = true } = {}) {
       interp.displayFormat = snap.settings.displayFormat;
       interp.ticTime = snap.settings.ticTime;
       if (snap.settings.warnings) interp.warningState = { all: snap.settings.warnings.all, off: new Set(snap.settings.warnings.off) };
+      if (snap.settings.rng) {
+        const g = generatorOf(interp);
+        g.setState(snap.settings.rng.state);
+        g.seedValue = snap.settings.rng.seed;
+      }
     }
     if (snap.figures && snap.figures.length) interp.figures = new Map(snap.figures);
     interp.workspace.dirty.clear();

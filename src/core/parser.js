@@ -40,7 +40,7 @@ const ASSIGNABLE = new Set(['Ident', 'Index', 'Field', 'DynField', 'CellIndex'])
 // where the ambiguity this shortcut sidesteps essentially never arises
 // in practice. See README.
 const COMMAND_SYNTAX_NAMES = new Set(['clear', 'hold', 'grid', 'axis', 'disp', 'format', 'box', 'legend', 'close', 'warning', 'xlim', 'ylim', 'zlim',
-  'colormap', 'colorbar', 'shading', 'drawnow', 'clim', 'caxis', 'pause']);
+  'colormap', 'colorbar', 'shading', 'drawnow', 'clim', 'caxis', 'pause', 'rng']);
 
 class Parser {
   constructor(tokens, source = '') {
