@@ -33,6 +33,35 @@ export class MatlabError extends Error {
   }
 }
 
+// [rows, cols] from a list of dimension sizes (a size vector or separate
+// size arguments). Trailing singleton dimensions are allowed, as in
+// MATLAB (zeros(2, 3, 1) is 2-by-3); anything else would be an N-D array.
+// Negative sizes count as 0, as in MATLAB.
+export function shape2D(dims, fname) {
+  for (const d of dims) {
+    if (!Number.isFinite(d) || !Number.isInteger(d)) throw new MatlabError(`${fname}: size inputs must be integers`);
+  }
+  for (let k = 2; k < dims.length; k++) {
+    if (dims[k] !== 1) throw new MatlabError(`${fname}: N-D arrays are not supported (size ${dims.join('x')}); dimensions after the second must be 1`);
+  }
+  return [Math.max(dims[0] ?? 0, 0), Math.max(dims[1] ?? 0, 0)];
+}
+
+// Sizes for an array constructor: f(n) is n-by-n; f(m, n, ...) and
+// f([m n ...]) give each dimension.
+export function shapeArgs(args, fname) {
+  if (args.length === 1) {
+    const v = args[0];
+    if (v.numel === 1) { const n = v.re[0]; return shape2D([n, n], fname); }
+    if (v.numel === 0) throw new MatlabError(`${fname}: size vector must have at least two elements`);
+    return shape2D(Array.from(v.re), fname);
+  }
+  return shape2D(args.map(a => {
+    if (a.numel !== 1) throw new MatlabError(`${fname}: size inputs must be scalar`);
+    return a.re[0];
+  }), fname);
+}
+
 export function retain(v) { if (v && typeof v === 'object' && '_refs' in v) v._refs++; return v; }
 export function release(v) { if (v && typeof v === 'object' && '_refs' in v && v._refs > 0) v._refs--; }
 
