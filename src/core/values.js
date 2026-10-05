@@ -62,6 +62,13 @@ export function shapeArgs(args, fname) {
   }), fname);
 }
 
+// Truth value of one element for the logical operators and logical():
+// MATLAB refuses to convert NaN.
+export function truthOf(r, i) {
+  if (Number.isNaN(r) || Number.isNaN(i)) throw new MatlabError("NaN's cannot be converted to logicals.", 'MATLAB:nologicalnan');
+  return r !== 0 || i !== 0;
+}
+
 export function retain(v) { if (v && typeof v === 'object' && '_refs' in v) v._refs++; return v; }
 export function release(v) { if (v && typeof v === 'object' && '_refs' in v && v._refs > 0) v._refs--; }
 
@@ -169,7 +176,7 @@ export class Mat {
     if (this.isEmpty) return false;
     for (let k = 0; k < this.re.length; k++) {
       if (Number.isNaN(this.re[k]) || (this.isComplex && Number.isNaN(this.im[k]))) {
-        throw new MatlabError('NaN values cannot be converted to logicals');
+        throw new MatlabError("NaN's cannot be converted to logicals.", 'MATLAB:nologicalnan');
       }
       const zero = this.re[k] === 0 && (!this.isComplex || this.im[k] === 0);
       if (zero) return false;
@@ -195,7 +202,9 @@ export class Mat {
       const ai = a.isComplex ? a.im[k] : 0;
       const [r, i] = fn(a.re[k], ai);
       re[k] = r;
-      if (i !== 0) { if (!im) im = new Float64Array(n); im[k] = i; }
+      // A NaN imaginary part from real input is an artifact of the complex
+      // formulas (e.g. Inf*0), not a complex result.
+      if (i !== 0 && !(Number.isNaN(i) && ai === 0)) { if (!im) im = new Float64Array(n); im[k] = i; }
     }
     return new Mat(a.rows, a.cols, re, im);
   }
@@ -223,7 +232,7 @@ export class Mat {
         const br = b.re[bk], bi = b.isComplex ? b.im[bk] : 0;
         const [vr, vi] = fn(ar, ai, br, bi);
         re[k] = vr;
-        if (vi !== 0) { if (!im) im = new Float64Array(n); im[k] = vi; }
+        if (vi !== 0 && !(Number.isNaN(vi) && ai === 0 && bi === 0)) { if (!im) im = new Float64Array(n); im[k] = vi; }
       }
     }
     return new Mat(rows, cols, re, im);

@@ -4,7 +4,7 @@
 // ME.message and ME.identifier just like MATLAB.
 
 import { Mat, StructArray, MatlabError, makeMException, isMException } from '../core/values.js';
-import { doSprintf, flattenArgsForPrintf } from './system.js';
+import { doSprintf, flattenArgsForPrintf } from './format.js';
 
 const ID_RE = /^[A-Za-z][\w-]*(:[\w-]+)+$/;
 
@@ -61,8 +61,7 @@ export function registerErrors(reg) {
         return [];
       }
       const { identifier, message } = parseMessageArgs(args, 'warning');
-      if (message === '' || !state.all || (identifier && state.off.has(identifier))) return [];
-      ctx.interp.print(`Warning: ${message}\n`);
+      if (message !== '') ctx.interp.warn(message, identifier);
       return [];
     },
   });

@@ -268,5 +268,77 @@ const isLogical = (interp, name) => interp.workspace.get(name).isLogical;
   checkThrows('permute order must be a permutation', () => run('permute([1 2], [1 1])'), /permutation/);
 }
 
+// ---- NaN and Inf follow MATLAB ----
+{
+  const { interp, run, getOutput, clearOutput } = makeInterp();
+  const v = (name) => fmtVar(interp, name);
+  const isReal = (name) => !interp.workspace.get(name).isComplex;
+  const show = (src) => { clearOutput(); run(src); return getOutput(); };
+  // Real arithmetic stays real: the complex formulas used to turn 1/0 into Inf + NaNi.
+  run('a = 1/0; b = -1/0; c = 0/0; d = [1 2]/0; e = NaN/2; f = 0*Inf; g = 0*NaN; h = [0 1]./[0 0]; k = Inf - Inf;');
+  check('division by zero and NaN arithmetic stay real', ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'k'].every(isReal), true);
+  check('1/0, -1/0, [1 2]/0', [v('a'), v('b'), v('d').re], [Infinity, -Infinity, [Infinity, Infinity]]);
+  run('s1 = sqrt(NaN); s2 = exp(NaN); s3 = log(NaN); s4 = sign(NaN); s5 = sin(Inf); s6 = exp(Inf); s7 = atan(Inf); s8 = tanh(Inf); s9 = sign(-Inf); s10 = log(0);');
+  check('elementary functions of NaN/Inf are real', ['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9', 's10'].every(isReal), true);
+  checkClose('atan(Inf), tanh(Inf), sign(-Inf), exp(Inf), log(0)', [v('s7'), v('s8'), v('s9'), v('s6'), v('s10')], [Math.PI / 2, 1, -1, Infinity, -Infinity]);
+  run('z = sqrt(-Inf); w = sqrt(-4); l = log(-1);');
+  check('negative reals still go complex', [interp.workspace.get('z').im[0], v('w'), interp.workspace.get('l').im[0]], [Infinity, { re: 0, im: 2 }, Math.PI]);
+  // Logical conversion of NaN is an error, as in MATLAB.
+  for (const src of ['logical(NaN)', 'NaN & true', 'true | NaN', 'xor(NaN, 1)', '~NaN', 'and(NaN, 1)', 'if NaN, end']) {
+    checkThrows(`${src} errors`, () => run(src), /NaN's cannot be converted to logicals/);
+  }
+  checkThrows('logical of a complex value', () => run('logical(1i)'), /Complex values cannot be converted/);
+  // any ignores NaN; all treats it as nonzero.
+  run('a1 = any([0 NaN]); a2 = any(NaN); a3 = all([1 NaN]); a4 = any([NaN 1]);');
+  check('any ignores NaN', [v('a1'), v('a2'), v('a3'), v('a4')], [0, 0, 1, 1]);
+  // NaN placement in sort: last ascending, first descending.
+  run("p = sort([3 NaN 1], 'descend'); [q, i] = sort([NaN 2 NaN 1], 'descend'); r = sort([3 NaN 1], 'MissingPlacement', 'first'); t = sort([3 NaN 1], 'descend', 'MissingPlacement', 'last');");
+  check('sort descend puts NaN first', [v('p').re, v('q').re, v('i').re], [[NaN, 3, 1], [NaN, NaN, 2, 1], [1, 3, 2, 4]]);
+  check('MissingPlacement', [v('r').re, v('t').re], [[NaN, 1, 3], [3, 1, NaN]]);
+  run("c = sort([-3, 2, 1i]); cr = sort([2+1i, 1+5i], 'ComparisonMethod', 'real');");
+  check('complex sort by abs, or by real part', [interp.workspace.get('c').im[0], interp.workspace.get('c').re[2], interp.workspace.get('cr').re[0]], [1, -3, 1]);
+  // sprintf/num2str/mat2str
+  run("t1 = sprintf('%d|%i|%x|%f|%e|%g', NaN, Inf, -Inf, NaN, Inf, -Inf); t2 = sprintf('%d', 1.5); t3 = sprintf('%e', 1.5); t4 = sprintf('%g', pi); t5 = sprintf('%5.1f|%+d|%05d', NaN, 3, -42); t6 = sprintf('%s', 65); t7 = sprintf('%d %d\\n', 1, 2, 3); t8 = sprintf('Value: %d.');");
+  check('sprintf NaN/Inf', v('t1'), 'NaN|Inf|-Inf|NaN|Inf|-Inf');
+  check('sprintf %d of a non-integer uses %e; %e has two exponent digits; %g has 6 digits', [v('t2'), v('t3'), v('t4')], ['1.500000e+00', '1.500000e+00', '3.14159']);
+  check('sprintf width, flags, %s of a number, value recycling, no values', [v('t5'), v('t6'), v('t7'), v('t8')], ['  NaN|+3|-0042', 'A', '1 2\n3 ', 'Value: .']);
+  check('fprintf NaN', show("fprintf('%d %d\\n', NaN, Inf)"), 'NaN Inf\n');
+  run("n1 = num2str(Inf); n2 = num2str(123.456); n3 = num2str([1 10 100]); n4 = num2str([1 NaN Inf]); n5 = mat2str(pi); n6 = mat2str([1 NaN; -Inf 0.5]);");
+  check('num2str / mat2str', [v('n1'), v('n2'), v('n3'), v('n4'), v('n5'), v('n6')], ['Inf', '123.456', '1   10  100', '1  NaN  Inf', '3.14159265358979', '[1 NaN;-Inf 0.5]']);
+  // Reductions over empty arrays
+  run('e1 = sum([]); e2 = prod([]); e3 = mean([]); e4 = median([]); e5 = std([]); e6 = var([]); e7 = sum(zeros(0, 3)); e8 = mean(zeros(0, 3)); e9 = sum(zeros(1, 0));');
+  check('empty reductions', [v('e1'), v('e2'), v('e3'), v('e4'), v('e5'), v('e6'), v('e7').re, v('e8').re, v('e9')], [0, 1, NaN, NaN, NaN, NaN, [0, 0, 0], [NaN, NaN, NaN], 0]);
+  check('mean of empty columns stays real', isReal('e8'), true);
+  // Linear algebra with NaN/Inf and singular matrices
+  run('x1 = [1 2; 3 4] \\ [1; NaN];');
+  check('NaN in b propagates through A\\b', v('x1').re, [NaN, NaN]);
+  check('singular A\\b warns', show('x2 = [1 0; 0 0] \\ [1; 1];'), 'Warning: Matrix is singular to working precision.\n');
+  check('singular inv warns and is Inf', [show('x3 = inv([1 0; 0 0]);'), v('x3').re], ['Warning: Matrix is singular to working precision.\n', [Infinity, Infinity, Infinity, Infinity]]);
+  check('nearly singular warns with RCOND', /close to singular or badly scaled\. Results may be inaccurate\. RCOND = \d\.\d{6}e-\d\d\./.test(show('x4 = magic(4) \\ [1;2;3;4];')), true);
+  check("warning('off', id) silences it", show("warning('off', 'MATLAB:singularMatrix'); x5 = [1 0; 0 0] \\ [1; 1];"), '');
+  // 'like' and complex()
+  run("l1 = nan(1, 2, 'like', 1); l2 = zeros(2, 'like', 5); c1 = complex(1, NaN); c2 = complex(1); c3 = isreal(complex(2)); c4 = complex([1 2], 3);");
+  check("'like'", [v('l1').re, v('l2').re], [[NaN, NaN], [0, 0, 0, 0]]);
+  check('complex()', [v('c1'), v('c2'), v('c3'), v('c4').im], [{ re: 1, im: NaN }, { re: 1, im: 0 }, 0, [3, 3]]);
+  checkThrows('complex() of a complex input', () => run('complex(1i, 2)'), /must be real/);
+  // Complex display, as MATLAB: decimals always, parts aligned.
+  check('complex display', [show('z1 = 1 + 2i'), show('z2 = [1+2i 3]'), show('z3 = NaN + 1i'), show('z4 = -1i'), show('z5 = 1e5 + 1i')],
+    ['z1 =\n   1.0000 + 2.0000i\n', 'z2 =\n   1.0000 + 2.0000i   3.0000 + 0.0000i\n', 'z3 =\n   NaN + 1.0000i\n', 'z4 =\n   0.0000 - 1.0000i\n', 'z5 =\n   1.0000e+05 + 1.0000e+00i\n']);
+}
+
+// ---- missing data ----
+{
+  const { interp, run } = makeInterp();
+  const v = (name) => fmtVar(interp, name);
+  run("m1 = ismissing([1 NaN 3]); m2 = ismissing({'a', '', 'b'}); m3 = ismissing([1 -99 3], -99); m4 = anynan([1 NaN]); m5 = allfinite([1 Inf]); m6 = standardizeMissing([1 -99 3], -99);");
+  check('ismissing / anynan / allfinite / standardizeMissing', [v('m1').re, v('m2').re, v('m3').re, v('m4'), v('m5'), v('m6').re], [[0, 1, 0], [0, 1, 0], [0, 1, 0], 1, 0, [1, NaN, 3]]);
+  run("r1 = rmmissing([1 NaN 3]); r2 = rmmissing([1 2; NaN 4; 5 6]); [r3, tf] = rmmissing([1 NaN; 3 4], 2); r4 = rmmissing({'a', '', 'b'}); r5 = rmmissing([NaN NaN; 1 NaN; 1 2], 'MinNumMissing', 2);");
+  check('rmmissing', [v('r1').re, v('r2').re, v('r3').re, v('tf').re, interp.workspace.get('r4').numel, v('r5').re], [[1, 3], [1, 5, 2, 6], [1, 3], [0, 1], 2, [1, 1, NaN, 2]]);
+  run("f1 = fillmissing([1 NaN 3], 'linear'); f2 = fillmissing([NaN 2 NaN 4 NaN], 'previous'); f3 = fillmissing([NaN 2 NaN 4 NaN], 'next'); f4 = fillmissing([NaN 2 NaN 4 NaN], 'nearest'); f5 = fillmissing([NaN 2 NaN 4 NaN], 'linear'); f6 = fillmissing([1 NaN; NaN 4], 'constant', [7 8]); [f7, ft] = fillmissing([1 NaN NaN 4], 'spline'); f8 = fillmissing([1 NaN; NaN 4], 'constant', 0, 2);");
+  check('fillmissing', [v('f1').re, v('f2').re, v('f3').re, v('f4').re, v('f5').re, v('f6').re, v('f7').re, v('ft').re, v('f8').re],
+    [[1, 2, 3], [NaN, 2, 2, 4, 4], [2, 2, 4, 4, NaN], [2, 2, 4, 4, 4], [1, 2, 3, 4, 5], [1, 7, 8, 4], [1, 2, 3, 4], [0, 1, 1, 0], [1, 0, 0, 4]]);
+  checkThrows('fillmissing unknown method', () => run("fillmissing([1 NaN], 'movmean')"), /unsupported method/);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

@@ -5,12 +5,21 @@
 import { Mat, MatlabError } from '../core/values.js';
 import * as C from '../core/cmath.js';
 
-function unary(fn) {
+// fn works over the complex domain; realFn, when given, handles real
+// input inside its real domain (returning undefined outside it), which is
+// both exact and right at the extremes (atan(Inf) = pi/2, tanh(Inf) = 1).
+function unary(fn, realFn = null) {
+  const f = realFn ? (r, i) => {
+    if (i === 0) { const v = realFn(r); if (v !== undefined) return [v, 0]; }
+    return fn(r, i);
+  } : fn;
   return (args) => {
     if (args.length !== 1) throw new MatlabError('Expected exactly 1 argument');
-    return [Mat.mapElementwise(args[0], fn)];
+    return [Mat.mapElementwise(args[0], f)];
   };
 }
+const inUnit = (fn) => (r) => (!(Math.abs(r) > 1) ? fn(r) : undefined); // |r| <= 1, or NaN
+const nonNegative = (fn) => (r) => (!(r < 0) ? fn(r) : undefined); // r >= 0, or NaN
 function unaryRealOut(fn) {
   return (args) => {
     if (args.length !== 1) throw new MatlabError('Expected exactly 1 argument');
@@ -61,17 +70,17 @@ export function registerElementwise(reg) {
   reg.set('sin', { fn: unary(C.csin) });
   reg.set('cos', { fn: unary(C.ccos) });
   reg.set('tan', { fn: unary(C.ctan) });
-  reg.set('asin', { fn: unary(casin) });
-  reg.set('acos', { fn: unary(cacos) });
-  reg.set('atan', { fn: unary(catan) });
+  reg.set('asin', { fn: unary(casin, inUnit(Math.asin)) });
+  reg.set('acos', { fn: unary(cacos, inUnit(Math.acos)) });
+  reg.set('atan', { fn: unary(catan, Math.atan) });
   reg.set('atan2', { fn: binaryReal((y, x) => Math.atan2(y, x)) });
-  reg.set('sinh', { fn: unary(csinh) });
-  reg.set('cosh', { fn: unary(ccosh) });
-  reg.set('tanh', { fn: unary(ctanh) });
+  reg.set('sinh', { fn: unary(csinh, Math.sinh) });
+  reg.set('cosh', { fn: unary(ccosh, Math.cosh) });
+  reg.set('tanh', { fn: unary(ctanh, Math.tanh) });
   reg.set('exp', { fn: unary(C.cexp) });
   reg.set('log', { fn: unary(C.clog) });
-  reg.set('log10', { fn: unary((r, i) => { const [lr, li] = C.clog(r, i); return [lr / Math.LN10, li / Math.LN10]; }) });
-  reg.set('log2', { fn: unary((r, i) => { const [lr, li] = C.clog(r, i); return [lr / Math.LN2, li / Math.LN2]; }) });
+  reg.set('log10', { fn: unary((r, i) => { const [lr, li] = C.clog(r, i); return [lr / Math.LN10, li / Math.LN10]; }, nonNegative(Math.log10)) });
+  reg.set('log2', { fn: unary((r, i) => { const [lr, li] = C.clog(r, i); return [lr / Math.LN2, li / Math.LN2]; }, nonNegative(Math.log2)) });
   reg.set('sqrt', { fn: unary(C.csqrt) });
   reg.set('abs', { fn: unaryRealOut(C.cabs) });
   reg.set('angle', { fn: unaryRealOut(C.cangle) });
@@ -79,7 +88,24 @@ export function registerElementwise(reg) {
   reg.set('real', { fn: unaryRealOut((r) => r) });
   reg.set('imag', { fn: unaryRealOut((_r, i) => i) });
   reg.set('conj', { fn: unary(C.cconj) });
-  reg.set('sign', { fn: unary((r, i) => { if (r === 0 && i === 0) return [0, 0]; const m = Math.hypot(r, i); return [r / m, i / m]; }) });
+  // complex(a) | complex(a, b): a + b*1i from real parts, kept complex even
+  // when the imaginary part is zero (so isreal(complex(1)) is false), and
+  // without the NaN/Inf mixing of a + b*1i (complex(1, NaN) is 1 + NaNi).
+  reg.set('complex', {
+    fn: (args) => {
+      if (args.length < 1 || args.length > 2) throw new MatlabError('complex: expected complex(a) or complex(a, b)');
+      const [a, b] = args;
+      for (const v of args) {
+        if (!(v instanceof Mat) || v.isChar) throw new MatlabError('complex: inputs must be numeric');
+        if (v.isComplex && v.im.some(x => x !== 0)) throw new MatlabError('complex: inputs must be real');
+      }
+      const out = b ? Mat.broadcastBinary(a, b, (ar, _ai, br) => [ar, 0]) : new Mat(a.rows, a.cols, Float64Array.from(a.re));
+      out.im = b ? Mat.broadcastBinary(a, b, (_ar, _ai, br) => [br, 0]).re : new Float64Array(a.numel);
+      out.isLogical = false;
+      return [out];
+    },
+  });
+  reg.set('sign', { fn: unary((r, i) => { if (r === 0 && i === 0) return [0, 0]; const m = Math.hypot(r, i); return [r / m, i / m]; }, Math.sign) });
   reg.set('floor', { fn: unary((r, i) => [Math.floor(r), Math.floor(i)]) });
   reg.set('ceil', { fn: unary((r, i) => [Math.ceil(r), Math.ceil(i)]) });
   // MATLAB rounds halves away from zero (round(-2.5) = -3); JS Math.round

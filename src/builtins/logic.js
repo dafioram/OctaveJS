@@ -3,7 +3,7 @@
 // minus, times, mtimes, eq, lt, ... (which MATLAB code passes around as
 // handles, e.g. cellfun(@plus, ...) or arrayfun(@times, ...)).
 
-import { Mat, Cell, StructArray, FunctionHandle, MatlabError } from '../core/values.js';
+import { Mat, Cell, StructArray, FunctionHandle, MatlabError, truthOf } from '../core/values.js';
 import { applyBinaryOp } from '../core/interpreter.js';
 
 // Deep equality as isequal defines it: same size and values, ignoring the
@@ -82,10 +82,10 @@ export function registerLogic(reg) {
   });
 
   const binary = (op) => ({
-    fn: (args) => {
+    fn: (args, _n, ctx) => {
       if (args.length !== 2) throw new MatlabError('Expected exactly 2 arguments');
       if (!(args[0] instanceof Mat) || !(args[1] instanceof Mat)) throw new MatlabError(`Operator '${op}' is only defined for numeric, logical and char arrays`);
-      return [applyBinaryOp(op, args[0], args[1])];
+      return [ctx.interp.reportWarnings(applyBinaryOp(op, args[0], args[1]))];
     },
   });
   const ops = {
@@ -102,7 +102,7 @@ export function registerLogic(reg) {
   reg.set('xor', {
     fn: (args) => {
       const out = Mat.broadcastBinary(truth(args[0]), truth(args[1]),
-        (ar, ai, br, bi) => [((ar !== 0 || ai !== 0) !== (br !== 0 || bi !== 0)) ? 1 : 0, 0]);
+        (ar, ai, br, bi) => [(truthOf(ar, ai) !== truthOf(br, bi)) ? 1 : 0, 0]);
       out.isLogical = true;
       return [out];
     },
@@ -110,8 +110,7 @@ export function registerLogic(reg) {
   reg.set('not', {
     fn: (args) => {
       const out = Mat.mapElementwise(truth(args[0]), (r, i) => {
-        if (Number.isNaN(r) || Number.isNaN(i)) throw new MatlabError('NaN values cannot be converted to logicals');
-        return [(r === 0 && i === 0) ? 1 : 0, 0];
+        return [truthOf(r, i) ? 0 : 1, 0];
       });
       out.isLogical = true;
       return [out];

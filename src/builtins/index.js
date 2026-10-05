@@ -22,6 +22,7 @@ import { registerOde } from './ode.js';
 import { registerOptim } from './optim.js';
 import { registerInterp } from './interp.js';
 import { registerRandom } from './random.js';
+import { registerMissing } from './missing.js';
 
 export function buildBuiltinsRegistry() {
   const reg = new Map();
@@ -44,5 +45,6 @@ export function buildBuiltinsRegistry() {
   registerOptim(reg);
   registerInterp(reg);
   registerRandom(reg);
+  registerMissing(reg);
   return reg;
 }

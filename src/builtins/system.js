@@ -2,86 +2,24 @@
 // printing (disp/fprintf/sprintf/num2str), and workspace management
 // (who/whos/clear/exist), plus feval/arrayfun/deal.
 
-import { Mat, Cell, FunctionHandle, MatlabError, colonRange, valueClassName, shapeArgs } from '../core/values.js';
+import { Mat, Cell, FunctionHandle, MatlabError, colonRange, valueClassName, shapeArgs, truthOf } from '../core/values.js';
 import { formatValue } from '../core/interpreter.js';
 import { parse } from '../core/parser.js';
 import { HELP_DATA } from './help-data.js';
+import { doSprintf, flattenArgsForPrintf, num2strDefault, mat2strValue, charMatrix } from './format.js';
 
 // Sizes for zeros/ones/rand/...: trailing class names ('double',
 // 'like', ...) are ignored; no size arguments gives a scalar.
 function shapeFromArgs(args, fname) {
   let a = args;
+  // f(..., 'like', p): the class of p (always double here).
+  if (a.length >= 2 && a[a.length - 2].isChar && a[a.length - 2].toJSString().toLowerCase() === 'like') a = a.slice(0, -2);
   while (a.length > 0 && a[a.length - 1].isChar) a = a.slice(0, -1);
   if (a.length === 0) return [1, 1];
   return shapeArgs(a, fname);
 }
 
-function formatNumForPrint(x) {
-  if (Number.isInteger(x)) return String(x);
-  if (!isFinite(x)) return String(x);
-  return Number(x.toPrecision(5)).toString();
-}
-
-// A pragmatic sprintf: supports %d %i %f %g %e %s %% with optional
-// width/precision (e.g. %6.2f), recycling the format string across the
-// flattened list of numeric/char arguments the way MATLAB's sprintf does.
-export function doSprintf(fmt, valueList) {
-  // MATLAB's fprintf/sprintf process C-style backslash escapes in the
-  // format string itself (independently of how the string literal was
-  // written), so `fprintf('done\n')` really does emit a newline.
-  fmt = fmt.replace(/\\[ntr\\]/g, (m) => ({ '\\n': '\n', '\\t': '\t', '\\r': '\r', '\\\\': '\\' }[m]));
-  const specRe = /%(-?\d+)?(\.\d+)?([diouxXeEfFgGsc%])/g;
-  let out = '';
-  let vi = 0;
-  const specs = [...fmt.matchAll(specRe)];
-  if (specs.length === 0) return fmt;
-  do {
-    let last = 0;
-    for (const m of specs) {
-      out += fmt.slice(last, m.index);
-      last = m.index + m[0].length;
-      const [, width, prec, conv] = m;
-      if (conv === '%') { out += '%'; continue; }
-      const val = valueList[vi++];
-      let piece;
-      if (conv === 's') {
-        piece = val === undefined ? '' : (typeof val === 'string' ? val : formatNumForPrint(val));
-      } else if (conv === 'c') {
-        piece = String.fromCharCode(Math.round(Number(val) || 0));
-      } else if ('di'.includes(conv)) {
-        piece = String(Math.round(Number(val) || 0));
-      } else if ('ouxX'.includes(conv)) {
-        const n = Math.round(Number(val) || 0);
-        piece = conv === 'o' ? n.toString(8) : n.toString(16);
-        if (conv === 'X') piece = piece.toUpperCase();
-      } else if ('eE'.includes(conv)) {
-        const p = prec ? parseInt(prec.slice(1)) : 6;
-        piece = Number(val).toExponential(p);
-        if (conv === 'E') piece = piece.toUpperCase();
-      } else { // f, g, G
-        const p = prec ? parseInt(prec.slice(1)) : (conv === 'f' ? 6 : undefined);
-        piece = p !== undefined ? Number(val).toFixed(p) : formatNumForPrint(Number(val));
-      }
-      if (width) {
-        const w = parseInt(width);
-        piece = w < 0 ? piece.padEnd(-w) : piece.padStart(w);
-      }
-      out += piece;
-    }
-    out += fmt.slice(last);
-  } while (vi < valueList.length && specs.length > 0);
-  return out;
-}
-
-export function flattenArgsForPrintf(args) {
-  const vals = [];
-  for (const a of args) {
-    if (!(a instanceof Mat)) throw new MatlabError(`Formatted printing doesn't accept ${valueClassName(a)} arguments; pass the contents instead (e.g. c{:} or s.field)`);
-    if (a.isChar) vals.push(a.toJSString());
-    else for (let k = 0; k < a.numel; k++) vals.push(a.re[k]);
-  }
-  return vals;
-}
+export { doSprintf, flattenArgsForPrintf };
 
 export function registerSystem(reg) {
   // Constants (real MATLAB implements these as ordinary functions too, so
@@ -195,7 +133,12 @@ export function registerSystem(reg) {
     },
   });
   reg.set('logical', {
-    fn: (args) => [Mat.mapElementwise(args[0], (r) => [r !== 0 ? 1 : 0, 0])].map(m => { m.isLogical = true; return m; }),
+    fn: (args) => {
+      if (args[0].isComplex && args[0].im.some(v => v !== 0)) throw new MatlabError('Complex values cannot be converted to logicals.');
+      const m = Mat.mapElementwise(args[0], (r, i) => [truthOf(r, i) ? 1 : 0, 0]);
+      m.isLogical = true;
+      return [m];
+    },
   });
   reg.set('char', {
     fn: (args) => {
@@ -234,42 +177,38 @@ export function registerSystem(reg) {
       if (!(a instanceof Mat)) throw new MatlabError('num2str: input must be numeric or char');
       if (a.isChar) return [a];
       if (args.length >= 2 && args[1] instanceof Mat && args[1].isChar) {
-        // num2str(A, format): sprintf the format over each row.
+        // num2str(A, format): the format applied to each row.
         const fmt = args[1].toJSString();
-        const rows = [];
+        const lines = [];
         for (let r = 0; r < a.rows; r++) {
           const vals = [];
           for (let c = 0; c < a.cols; c++) vals.push(a.re[c * a.rows + r]);
-          rows.push(doSprintf(fmt, vals));
+          lines.push(doSprintf(fmt, vals));
         }
-        return [Mat.fromString(rows.join('\n'))];
+        return [charMatrix(lines)];
       }
-      if (a.numel === 1) {
-        if (args.length >= 2) {
-          const p = Math.round(args[1].toScalarNumber());
-          return [Mat.fromString(Number(a.re[0]).toPrecision(p))];
+      if (args.length >= 2) {
+        // num2str(A, precision): %.<precision>g
+        const p = Math.round(args[1].toScalarNumber());
+        if (!(p > 0)) throw new MatlabError('num2str: precision must be a positive integer');
+        const lines = [];
+        for (let r = 0; r < a.rows; r++) {
+          const vals = [];
+          for (let c = 0; c < a.cols; c++) vals.push(a.re[c * a.rows + r]);
+          lines.push(vals.map(v => doSprintf(`%.${p}g`, [v])).join('  '));
         }
-        return [Mat.fromString(formatNumForPrint(a.re[0]))];
+        return [charMatrix(lines)];
       }
-      const rows = [];
-      for (let r = 0; r < a.rows; r++) {
-        const parts = [];
-        for (let c = 0; c < a.cols; c++) parts.push(formatNumForPrint(a.get2(r, c)));
-        rows.push(parts.join('  '));
-      }
-      return [Mat.fromString(rows.join('\n'))];
+      return [num2strDefault(a)];
     },
   });
+  // mat2str(A) | mat2str(A, n): text that evaluates back to A.
   reg.set('mat2str', {
     fn: (args) => {
       const a = args[0];
-      const rows = [];
-      for (let r = 0; r < a.rows; r++) {
-        const parts = [];
-        for (let c = 0; c < a.cols; c++) parts.push(formatNumForPrint(a.get2(r, c)));
-        rows.push(parts.join(' '));
-      }
-      return [Mat.fromString('[' + rows.join(';') + ']')];
+      if (!(a instanceof Mat)) throw new MatlabError('mat2str: input must be numeric, logical or char');
+      const n = args.length >= 2 ? Math.round(args[1].toScalarNumber()) : 15;
+      return [Mat.fromString(mat2strValue(a, n))];
     },
   });
 
