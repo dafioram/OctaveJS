@@ -91,8 +91,21 @@ MATLAB's older `rand('seed', s)`/`rand('state', s)`/`rand('twister', s)`
 syntaxes, which it plans to remove, still work here with a warning.
 Stop restores the generator along with the workspace.
 
+**NaN, Inf and missing data** behave as in MATLAB: real arithmetic stays
+real (`1/0` is `Inf`, `0/0` is `NaN`); `NaN == NaN` is false (`isequaln`
+treats NaNs as equal); converting NaN to logical (`if NaN`, `logical(NaN)`,
+`NaN & x`) is an error; `max`/`min`/`any` ignore NaN while `sum`/`mean`/
+`median`/`std`/... return NaN unless given `'omitnan'`; `sort` puts NaN last
+ascending and first descending (`'MissingPlacement'` to choose); `unique`
+keeps each NaN; `sprintf`/`num2str` print `NaN`/`Inf`; `A\b` propagates
+NaN/Inf and warns about singular or nearly singular matrices, like MATLAB
+(`warning('off', 'MATLAB:singularMatrix')` silences it). Missing-data
+functions: `ismissing`, `rmmissing`, `fillmissing` (`'constant'`,
+`'previous'`, `'next'`, `'nearest'`, `'linear'`, `'spline'`, `'pchip'`),
+`anynan`, `allfinite`, `standardizeMissing`.
+
 **Math:** the trig/exp/log/rounding family (auto-promoting to complex
-where real MATLAB does, e.g. `sqrt(-1)`, `asin(2)`); `sum`, `prod`, `mean`,
+where real MATLAB does, e.g. `sqrt(-1)`, `asin(2)`; `complex(a, b)`); `sum`, `prod`, `mean`,
 `median`, `std`, `var`, `min`/`max` (with index output), `range`, `mode`,
 `cumsum`, `cumprod` — all with a dimension argument and, where MATLAB has
 them, the `'all'` and `'omitnan'`/`'includenan'` options; `sort` (with index output, `'ascend'`/`'descend'`), `unique`,
@@ -322,6 +335,8 @@ src/builtins/   elementwise.js, reduction.js, linalg.js, fft.js,
                 logic.js, mathext.js, strings.js, ode.js (ODE
                 solvers), optim.js (fzero, fmin*, integral), interp.js
                 (interp1/2, spline, pchip), random.js (rand & co., rng),
+                format.js (sprintf/num2str/mat2str), missing.js (ismissing,
+                rmmissing, fillmissing),
                 numutil.js, index.js — the
                 function library, registered into the interpreter.
 src/mat5/       mat5.js — the MAT5 binary codec.
@@ -420,6 +435,8 @@ workspace in the page's memory.
   arrays as integers, everything else with 4 decimals, switching to
   e-notation for scalars (`1.0000e+10`) or a common `1.0e+03 *` scale
   factor for arrays whose magnitudes fall outside [0.001, 1000).
+  Complex values always show decimals with the parts aligned
+  (`1.0000 + 2.0000i`, `3.0000 + 0.0000i`), as MATLAB does.
 - Typing a bare variable name (`x`) displays `x = ...` and leaves `ans`
   untouched, as in MATLAB.
 - Recursion is capped at MATLAB's default limit of 500 calls, but the
@@ -430,7 +447,12 @@ workspace in the page's memory.
   non-singleton dimension" rule: down each column for a general matrix,
   along the vector itself for a row or column vector. Pass an explicit
   dimension argument to override.
-- `fprintf`/`sprintf` process backslash escapes (`\n`, `\t`, `\r`, `\\`)
+- `fprintf`/`sprintf` follow C's (and MATLAB's) conversions: flags,
+  width, precision and `*`, `%e` with two-digit exponents, `%g` with 6
+  significant digits; a non-integer given to `%d` prints with `%e` and a
+  number given to `%s` prints its character, as in MATLAB; when the values
+  run out partway through the format, output stops at that conversion.
+  They process backslash escapes (`\n`, `\t`, `\r`, `\\`, `\xHH`, ...)
   in the format string itself, matching real MATLAB — this is separate
   from how the string literal itself is parsed (single-quoted strings
   don't otherwise treat `\` as special).

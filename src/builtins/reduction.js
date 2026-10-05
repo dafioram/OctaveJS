@@ -8,6 +8,9 @@ function defaultDim(mat) {
   if (mat.rows === 1) return 2;
   return 1;
 }
+// MATLAB reduces a 0-by-0 input with no dimension given to a scalar:
+// sum([]) is 0, prod([]) is 1, mean([]) is NaN.
+const emptySquare = (m) => m.rows === 0 && m.cols === 0;
 
 function columnsOf(mat) {
   const cols = [];
@@ -37,8 +40,9 @@ function rowsOf(mat) {
 // Reduce along `dim` (1=down columns, 2=across rows), fn(values[]) -> {re,im}.
 // A dim of 3 or more is a singleton dimension of a 2-D array, so each
 // element is reduced on its own (sum(A,3) is A itself, as in MATLAB).
+// An empty slice reduces to fn([]): sum(zeros(0,3)) is [0 0 0] and
+// mean(zeros(0,3)) is [NaN NaN NaN], as in MATLAB.
 function reduceAlong(mat, dim, fn) {
-  if (mat.isEmpty) return Mat.empty();
   if (dim >= 3) {
     const re = new Float64Array(mat.numel);
     let im = null;
@@ -130,8 +134,10 @@ function asColumn(m) {
 function reduction(fn, nanDefault = false) {
   return (args) => {
     const { args: a, all, omitnan } = splitFlags(args);
-    const x = all ? asColumn(a[0]) : a[0];
-    const dim = all ? 1 : (getDimArg(a) || defaultDim(x));
+    const dimArg = getDimArg(a);
+    const whole = all || (dimArg === null && emptySquare(a[0]));
+    const x = whole ? asColumn(a[0]) : a[0];
+    const dim = whole ? 1 : (dimArg || defaultDim(x));
     const skip = omitnan === null ? nanDefault : omitnan;
     return [reduceAlong(x, dim, skip ? (vals) => fn(vals.filter(v => !isNaNVal(v))) : fn)];
   };
@@ -139,7 +145,7 @@ function reduction(fn, nanDefault = false) {
 
 function sumVals(vals) { return vals.reduce((a, v) => ({ re: a.re + v.re, im: a.im + v.im }), { re: 0, im: 0 }); }
 function prodVals(vals) { return vals.reduce((a, v) => ({ re: a.re * v.re - a.im * v.im, im: a.re * v.im + a.im * v.re }), { re: 1, im: 0 }); }
-function meanVals(vals) { const s = sumVals(vals); return { re: s.re / vals.length, im: s.im / vals.length }; }
+function meanVals(vals) { const s = sumVals(vals); return { re: s.re / vals.length, im: vals.length ? s.im / vals.length : 0 }; }
 
 export function registerReduction(reg) {
   reg.set('sum', { fn: reduction(sumVals) });
@@ -157,7 +163,7 @@ export function registerReduction(reg) {
 
   reg.set('median', {
     fn: reduction((vals) => {
-      if (vals.some(isNaNVal)) return { re: NaN, im: 0 }; // includenan (default): any NaN gives NaN
+      if (vals.length === 0 || vals.some(isNaNVal)) return { re: NaN, im: 0 }; // includenan (default): any NaN gives NaN
       const xs = vals.map(v => v.re).sort((a, b) => a - b);
       const n = xs.length;
       const m = n % 2 === 1 ? xs[(n - 1) / 2] : (xs[n / 2 - 1] + xs[n / 2]) / 2;
@@ -166,6 +172,7 @@ export function registerReduction(reg) {
   });
 
   function variance(vals, sampleCorrection) {
+    if (vals.length === 0) return { re: NaN, im: 0 };
     const mu = meanVals(vals);
     let s = 0;
     for (const v of vals) {
@@ -179,14 +186,15 @@ export function registerReduction(reg) {
   // w = 1 by N — the second argument is a weight, not a dimension.
   function varianceArgs(allArgs) {
     const { args, all, omitnan } = splitFlags(allArgs);
-    if (all) args[0] = asColumn(args[0]);
+    const whole = all || (getDimArg(args, 2) === null && emptySquare(args[0]));
+    if (whole) args[0] = asColumn(args[0]);
     let population = false;
     if (args.length >= 2 && !args[1].isEmpty) {
       const w = args[1].toScalarNumber();
       if (w !== 0 && w !== 1) throw new MatlabError('Weight argument must be 0 or 1');
       population = w === 1;
     }
-    const dim = all ? 1 : (getDimArg(args, 2) || defaultDim(args[0]));
+    const dim = whole ? 1 : (getDimArg(args, 2) || defaultDim(args[0]));
     return reduceAlong(args[0], dim, (v) => variance(omitnan ? v.filter(x => !isNaNVal(x)) : v, !population));
   }
   reg.set('var', { fn: (args) => [varianceArgs(args)] });

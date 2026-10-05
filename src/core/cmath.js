@@ -5,8 +5,14 @@
 
 export function cadd(ar, ai, br, bi) { return [ar + br, ai + bi]; }
 export function csub(ar, ai, br, bi) { return [ar - br, ai - bi]; }
-export function cmul(ar, ai, br, bi) { return [ar * br - ai * bi, ar * bi + ai * br]; }
+// Real operands take the plain real operation: the complex formulas
+// would turn 1/0 or 0*NaN into a NaN imaginary part (Inf + NaNi).
+export function cmul(ar, ai, br, bi) {
+  if (ai === 0 && bi === 0) return [ar * br, 0];
+  return [ar * br - ai * bi, ar * bi + ai * br];
+}
 export function cdiv(ar, ai, br, bi) {
+  if (ai === 0 && bi === 0) return [ar / br, 0];
   const d = br * br + bi * bi;
   if (d === 0) {
     if (ar === 0 && ai === 0) return [NaN, NaN];
@@ -20,14 +26,17 @@ export function cabs(ar, ai) { return Math.hypot(ar, ai); }
 export function cangle(ar, ai) { return Math.atan2(ai, ar); }
 
 export function cexp(ar, ai) {
+  if (ai === 0) return [Math.exp(ar), 0];
   const e = Math.exp(ar);
   return [e * Math.cos(ai), e * Math.sin(ai)];
 }
 export function clog(ar, ai) {
+  if (ai === 0 && !(ar < 0)) return [Math.log(ar), 0]; // includes NaN
   return [Math.log(Math.hypot(ar, ai)), Math.atan2(ai, ar)];
 }
 export function csqrt(ar, ai) {
-  if (ai === 0 && ar >= 0) return [Math.sqrt(ar), 0];
+  if (ai === 0 && !(ar < 0)) return [Math.sqrt(ar), 0]; // includes NaN
+  if (ai === 0) return [0, Math.sqrt(-ar)]; // negative real: purely imaginary (sqrt(-Inf) = 0 + Infi)
   const r = Math.hypot(ar, ai);
   const re = Math.sqrt((r + ar) / 2);
   const im = Math.sign(ai || 1) * Math.sqrt((r - ar) / 2);
@@ -42,7 +51,7 @@ export function cpow(ar, ai, br, bi) {
   // drift from routing everything through exp(b*log(a))); MATLAB still
   // promotes to complex for a negative real base with a non-integer
   // exponent, so only take this path when the result is genuinely real.
-  if (ai === 0 && bi === 0 && (ar >= 0 || Number.isInteger(br))) {
+  if (ai === 0 && bi === 0 && (!(ar < 0) || Number.isInteger(br) || Number.isNaN(br))) {
     return [Math.pow(ar, br), 0];
   }
   // a^b = exp(b * log(a))
@@ -51,12 +60,15 @@ export function cpow(ar, ai, br, bi) {
   return cexp(er, ei);
 }
 export function csin(ar, ai) {
+  if (ai === 0) return [Math.sin(ar), 0];
   return [Math.sin(ar) * Math.cosh(ai), Math.cos(ar) * Math.sinh(ai)];
 }
 export function ccos(ar, ai) {
+  if (ai === 0) return [Math.cos(ar), 0];
   return [Math.cos(ar) * Math.cosh(ai), -Math.sin(ar) * Math.sinh(ai)];
 }
 export function ctan(ar, ai) {
+  if (ai === 0) return [Math.tan(ar), 0];
   const [sr, si] = csin(ar, ai);
   const [cr, ci] = ccos(ar, ai);
   return cdiv(sr, si, cr, ci);

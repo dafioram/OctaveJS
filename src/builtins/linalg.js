@@ -156,6 +156,79 @@ export function computeSVD(mat) {
   return { U: Umat, S: Smat, V: Vmat, singularValues: sSorted };
 }
 
+// ---------------- LU factorization (real, square) ----------------
+// Gaussian elimination with partial pivoting, as LAPACK's dgetrf does: a
+// zero pivot column is skipped (the factor is then singular), and the
+// triangular solves skip zero entries the way BLAS's dtrsv does, so
+// NaN/Inf propagate like MATLAB's.
+function luFactor(a) {
+  const n = a.rows;
+  const LU = Float64Array.from(a.re); // column-major
+  const piv = Array.from({ length: n }, (_, i) => i);
+  let singular = false;
+  for (let k = 0; k < n; k++) {
+    let p = k, best = -1;
+    for (let i = k; i < n; i++) {
+      const v = Math.abs(LU[k * n + i]);
+      if (v > best) { best = v; p = i; }
+      else if (Number.isNaN(v) && best < 0) p = i;
+    }
+    if (p !== k) {
+      for (let j = 0; j < n; j++) { const t = LU[j * n + k]; LU[j * n + k] = LU[j * n + p]; LU[j * n + p] = t; }
+      [piv[k], piv[p]] = [piv[p], piv[k]];
+    }
+    const pivot = LU[k * n + k];
+    if (pivot === 0) { singular = true; continue; }
+    for (let i = k + 1; i < n; i++) {
+      const l = LU[k * n + i] / pivot;
+      LU[k * n + i] = l;
+      if (l !== 0) for (let j = k + 1; j < n; j++) LU[j * n + i] -= l * LU[j * n + k];
+    }
+  }
+  return { n, LU, piv, singular };
+}
+
+function luSolve({ n, LU, piv }, b) {
+  const m = b.cols;
+  const x = new Float64Array(n * m);
+  for (let c = 0; c < m; c++) {
+    const y = piv.map(i => b.re[c * n + i]);
+    for (let j = 0; j < n; j++) { // unit lower triangle
+      if (y[j] === 0) continue;
+      for (let i = j + 1; i < n; i++) y[i] -= y[j] * LU[j * n + i];
+    }
+    for (let j = n - 1; j >= 0; j--) { // upper triangle
+      if (y[j] === 0) continue;
+      y[j] /= LU[j * n + j];
+      for (let i = 0; i < j; i++) y[i] -= y[j] * LU[j * n + i];
+    }
+    x.set(y, c * n);
+  }
+  return new Mat(n, m, x);
+}
+
+// MATLAB's "close to singular" warning: the reciprocal condition number
+// (in the 1-norm) below eps. invA is A's inverse when already known.
+function conditionWarning(a, lu, invA) {
+  const n = a.rows;
+  if (n === 0 || n > 400 || !Array.from(a.re).every(Number.isFinite)) return null;
+  const norm1 = (M) => {
+    let best = 0;
+    for (let c = 0; c < M.cols; c++) { let s = 0; for (let r = 0; r < M.rows; r++) s += Math.abs(M.re[c * M.rows + r]); best = Math.max(best, s); }
+    return best;
+  };
+  let inv = invA;
+  if (!inv) {
+    const I = new Mat(n, n, new Float64Array(n * n));
+    for (let k = 0; k < n; k++) I.re[k * n + k] = 1;
+    inv = luSolve(lu, I);
+  }
+  const rcond = 1 / (norm1(a) * norm1(inv));
+  if (!(rcond < Number.EPSILON)) return null;
+  const r = rcond.toExponential(6).replace(/e([+-])(\d)$/, 'e$10$2');
+  return { message: `Matrix is close to singular or badly scaled. Results may be inaccurate. RCOND = ${r}.`, identifier: 'MATLAB:nearlySingularMatrix' };
+}
+
 export function registerLinalg(reg) {
   reg.set('size', {
     fn: (args, nargout) => {
@@ -278,7 +351,7 @@ export function registerLinalg(reg) {
     },
   });
   reg.set('rank', { fn: (args) => [Mat.scalar(computeRank(args[0]))] });
-  reg.set('inv', { fn: (args) => { requireSquare(args[0], 'inv'); return [fromRowMajor(math.inv(toRowMajor(args[0])))]; } });
+  reg.set('inv', { fn: (args, _n, ctx) => [ctx.interp.reportWarnings(inverse(args[0]))] });
   reg.set('pinv', { fn: (args) => [fromRowMajor(math.pinv(toRowMajor(args[0])))] });
 
   reg.set('dot', {
@@ -419,7 +492,24 @@ export function registerLinalg(reg) {
   });
 
   // ---- backend hooks used by the `\`, `/`, and `^` operators ----
-  function inverse(a) { requireSquare(a, 'inv'); return fromRowMajor(math.inv(toRowMajor(a))); }
+  function inverse(a) {
+    requireSquare(a, 'inv');
+    if (a.isComplex) return fromRowMajor(math.inv(toRowMajor(a)));
+    const n = a.rows;
+    const lu = luFactor(a);
+    if (lu.singular) {
+      // MATLAB: an exactly singular matrix has an all-Inf inverse, with a warning.
+      const out = new Mat(n, n, new Float64Array(n * n).fill(Infinity));
+      out.warnings = [{ message: 'Matrix is singular to working precision.', identifier: 'MATLAB:singularMatrix' }];
+      return out;
+    }
+    const I = new Mat(n, n, new Float64Array(n * n));
+    for (let k = 0; k < n; k++) I.re[k * n + k] = 1;
+    const out = luSolve(lu, I);
+    const w = conditionWarning(a, lu, out);
+    if (w) out.warnings = [w];
+    return out;
+  }
   // math.js's lusolve only accepts a single-column right-hand side (verified
   // directly: passing a multi-column matrix throws "Matrix columns must
   // match vector length"), so for A\B with a matrix B we solve column by
@@ -427,6 +517,15 @@ export function registerLinalg(reg) {
   // result keeps imaginary parts rather than dropping them.
   function solve(a, b) {
     if (a.rows !== b.rows) throw new MatlabError(`Matrix dimensions must agree for A\\b (${a.sizeStr()} vs ${b.sizeStr()})`);
+    if (a.rows === a.cols && !a.isComplex && !b.isComplex) {
+      // Square and real: LU with partial pivoting (NaN and Inf propagate as
+      // in MATLAB; a singular matrix gives Inf/NaN and a warning).
+      const lu = luFactor(a);
+      const x = luSolve(lu, b);
+      const w = lu.singular ? { message: 'Matrix is singular to working precision.', identifier: 'MATLAB:singularMatrix' } : conditionWarning(a, lu, null);
+      if (w) x.warnings = [w];
+      return x;
+    }
     let A = toRowMajor(a), B = toRowMajor(b);
     if (a.rows !== a.cols) {
       // Overdetermined/underdetermined: least-squares via the normal

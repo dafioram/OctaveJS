@@ -11,7 +11,7 @@
 import { parse } from './parser.js';
 import {
   Mat, Cell, StructArray, FunctionHandle, MatlabError, colonRange,
-  retain, release, valueClassName, makeMException,
+  retain, release, valueClassName, makeMException, truthOf,
 } from './values.js';
 import * as C from './cmath.js';
 
@@ -113,6 +113,17 @@ export class Interpreter {
   }
 
   print(text) { if (this.host.print) this.host.print(text); }
+  // A MATLAB warning: printed unless turned off with warning('off', ...).
+  warn(message, identifier = '') {
+    const state = this.warningState;
+    if (state && (!state.all || (identifier && state.off.has(identifier)))) return;
+    this.print(`Warning: ${message}\n`);
+  }
+  // Warnings a numeric routine attached to its result (see linalg.js).
+  reportWarnings(v) {
+    if (v && v.warnings) { for (const w of v.warnings) this.warn(w.message, w.identifier); delete v.warnings; }
+    return v;
+  }
 
   // ---------------- top-level run ----------------
 
@@ -811,8 +822,7 @@ export class Interpreter {
     if (node.op === '-') return Mat.mapElementwise(v, (r, i) => [-r, -i]);
     if (node.op === '~') {
       const out = Mat.mapElementwise(v, (r, i) => {
-        if (Number.isNaN(r) || Number.isNaN(i)) throw new MatlabError('NaN values cannot be converted to logicals');
-        return [(r === 0 && i === 0) ? 1 : 0, 0];
+        return [truthOf(r, i) ? 0 : 1, 0];
       });
       out.isLogical = true;
       return out;
@@ -869,7 +879,7 @@ export class Interpreter {
     const b = this.evalExpr(node.right, scope);
     requireMatOperand(a, op);
     requireMatOperand(b, op);
-    return applyBinaryOp(op, a, b);
+    return this.reportWarnings(applyBinaryOp(op, a, b));
   }
 
   // ---------------- indexing & calls ----------------
@@ -1366,8 +1376,8 @@ export function applyBinaryOp(op, a, b) {
     case '>': return taggedLogical(Mat.broadcastBinary(a, b, (ar, _ai, br, _bi) => [(ar > br) ? 1 : 0, 0]));
     case '<=': return taggedLogical(Mat.broadcastBinary(a, b, (ar, _ai, br, _bi) => [(ar <= br) ? 1 : 0, 0]));
     case '>=': return taggedLogical(Mat.broadcastBinary(a, b, (ar, _ai, br, _bi) => [(ar >= br) ? 1 : 0, 0]));
-    case '&': return taggedLogical(Mat.broadcastBinary(a, b, (ar, ai, br, bi) => [((ar !== 0 || ai !== 0) && (br !== 0 || bi !== 0)) ? 1 : 0, 0]));
-    case '|': return taggedLogical(Mat.broadcastBinary(a, b, (ar, ai, br, bi) => [((ar !== 0 || ai !== 0) || (br !== 0 || bi !== 0)) ? 1 : 0, 0]));
+    case '&': return taggedLogical(Mat.broadcastBinary(a, b, (ar, ai, br, bi) => [(truthOf(ar, ai) & truthOf(br, bi)) ? 1 : 0, 0]));
+    case '|': return taggedLogical(Mat.broadcastBinary(a, b, (ar, ai, br, bi) => [(truthOf(ar, ai) | truthOf(br, bi)) ? 1 : 0, 0]));
     case '*': return matMultiply(a, b);
     case '/': return matRightDivide(a, b);
     case '\\': return matLeftDivide(a, b);
@@ -1409,12 +1419,14 @@ function matPower(a, b) {
     if (n === 0) return identityLike(a.rows);
     let result = identityLike(a.rows);
     let base = n < 0 ? matInverse(a) : a;
+    const warnings = base.warnings;
     let exp = Math.abs(n);
     while (exp > 0) {
       if (exp & 1) result = matMultiply(result, base);
       base = matMultiply(base, base);
       exp >>= 1;
     }
+    if (warnings) result.warnings = warnings;
     return result;
   }
   throw new MatlabError('Matrix power A^B with non-scalar, non-integer exponent is not supported');
@@ -1540,6 +1552,7 @@ export function formatMat(mat, style = 'short') {
   const decimals = (mag) => (!long ? 4 : mag < 10 ? 15 : Math.max(15 - Math.floor(Math.log10(mag)), 1));
   const exp = (x) => fmtExp(x, long ? 15 : 4);
   if (mat.isEmpty) return `     [](${mat.rows}x${mat.cols})`;
+  if (mat.isComplex) return formatComplex(mat, decimals, exp);
   const n = mat.numel;
   let allInt = true, maxAbs = 0;
   const scan = (x) => {
@@ -1567,24 +1580,52 @@ export function formatMat(mat, style = 'short') {
     fmt = (x) => fmtSpecial(x) ?? (x === 0 ? '0' : (x / scale).toFixed(d));
   }
 
-  const fmtNum = (r, i) => {
-    if (mat.isComplex) {
-      const sign = (i < 0 || Object.is(i, -0)) ? '-' : '+';
-      return `${fmt(r)} ${sign} ${fmt(Math.abs(i))}i`;
-    }
-    return fmt(r);
-  };
   const cells = [];
   for (let r = 0; r < mat.rows; r++) {
     const row = [];
-    for (let c = 0; c < mat.cols; c++) {
-      const k = c * mat.rows + r;
-      row.push(fmtNum(mat.re[k], mat.isComplex ? mat.im[k] : 0));
-    }
+    for (let c = 0; c < mat.cols; c++) row.push(fmt(mat.re[c * mat.rows + r]));
     cells.push(row);
   }
   const width = Math.max(...cells.flat().map(s => s.length), 1);
   return header + cells.map(row => '   ' + row.map(s => s.padStart(width)).join('   ')).join('\n');
+}
+
+// Complex arrays, MATLAB-style: both parts always with decimals
+// (3.0000 + 4.0000i), a common scale factor for arrays of large or tiny
+// values, and real and imaginary parts aligned in columns.
+function formatComplex(mat, decimals, exp) {
+  const n = mat.numel;
+  let maxAbs = 0;
+  for (let k = 0; k < n; k++) {
+    for (const x of [mat.re[k], mat.im[k]]) if (Number.isFinite(x) && Math.abs(x) > maxAbs) maxAbs = Math.abs(x);
+  }
+  const inRange = maxAbs === 0 || (maxAbs >= 1e-3 && maxAbs < 1e3);
+  let header = '', fmt;
+  if (inRange) {
+    const d = decimals(maxAbs);
+    fmt = (x) => fmtSpecial(x) ?? x.toFixed(d);
+  } else if (n === 1) {
+    fmt = (x) => fmtSpecial(x) ?? exp(x);
+  } else {
+    const p = Math.floor(Math.log10(maxAbs));
+    const scale = Math.pow(10, p);
+    header = `   1.0e${p < 0 ? '-' : '+'}${String(Math.abs(p)).padStart(2, '0')} *\n\n`;
+    const d = decimals(1);
+    fmt = (x) => fmtSpecial(x) ?? (x / scale).toFixed(d);
+  }
+  const reStr = Array.from(mat.re, x => fmt(x === 0 ? 0 : x));
+  const imStr = Array.from(mat.im, x => fmt(Math.abs(x)));
+  const wr = Math.max(...reStr.map(t => t.length)), wi = Math.max(...imStr.map(t => t.length));
+  const lines = [];
+  for (let r = 0; r < mat.rows; r++) {
+    const row = [];
+    for (let c = 0; c < mat.cols; c++) {
+      const k = c * mat.rows + r;
+      row.push(`${reStr[k].padStart(wr)} ${mat.im[k] < 0 ? '-' : '+'} ${imStr[k].padStart(wi)}i`);
+    }
+    lines.push('   ' + row.join('   '));
+  }
+  return header + lines.join('\n');
 }
 function fmtSpecial(x) {
   if (Number.isNaN(x)) return 'NaN';

@@ -26,7 +26,7 @@ const BUILTIN_HINTS = new Set([
   'cumsum', 'cumprod', 'size', 'length', 'numel', 'reshape', 'diag', 'triu',
   'tril', 'det', 'trace', 'rank', 'norm', 'dot', 'cross', 'inv', 'pinv', 'eig',
   'svd', 'lu', 'qr', 'transpose', 'ctranspose', 'fft', 'ifft', 'zeros', 'ones',
-  'eye', 'rand', 'randn', 'randi', 'randperm', 'rng', 'linspace', 'logspace', 'colon', 'class',
+  'eye', 'rand', 'randn', 'randi', 'randperm', 'rng', 'complex', 'ismissing', 'anynan', 'allfinite', 'standardizeMissing', 'rmmissing', 'fillmissing', 'linspace', 'logspace', 'colon', 'class',
   'isa', 'isnumeric', 'ischar', 'islogical', 'isreal', 'iscomplex', 'double',
   'logical', 'char', 'disp', 'fprintf', 'sprintf', 'num2str', 'mat2str',
   'who', 'whos', 'clear', 'clc', 'help', 'exist', 'feval', 'arrayfun', 'deal', 'plot',

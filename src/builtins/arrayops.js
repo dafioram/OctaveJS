@@ -48,7 +48,10 @@ function anyAll(args, mode) {
     if (mat.rows === 0 && mat.cols === 0) return Mat.logicalScalar(allMode); // any([]) = false, all([]) = true
     dim = mat.rows === 1 ? 2 : 1;
   }
-  const nz = (k) => mat.re[k] !== 0 || (mat.isComplex && mat.im[k] !== 0);
+  // any ignores NaN (MATLAB's rule); for all, NaN is nonzero and so true.
+  const nz = allMode
+    ? (k) => mat.re[k] !== 0 || (mat.isComplex && mat.im[k] !== 0)
+    : (k) => (mat.re[k] !== 0 && !Number.isNaN(mat.re[k])) || (mat.isComplex && mat.im[k] !== 0 && !Number.isNaN(mat.im[k]));
   if (dim >= 3) return tagLogical(new Mat(mat.rows, mat.cols, Float64Array.from({ length: mat.numel }, (_, k) => (nz(k) ? 1 : 0))));
   const test = (start, count, stride) => {
     for (let i = 0; i < count; i++) {
@@ -111,14 +114,23 @@ function flipDim(mat, dim) {
   return out;
 }
 
-function compareForSort(x, y, descending) {
-  const xm = x.im !== 0 ? Math.hypot(x.re, x.im) : x.re;
-  const ym = y.im !== 0 ? Math.hypot(y.re, y.im) : y.re;
-  const xNaN = Number.isNaN(xm), yNaN = Number.isNaN(ym);
-  if (xNaN && yNaN) return 0;
-  if (xNaN) return 1; // NaN always sorts last, regardless of direction (matches MATLAB)
-  if (yNaN) return -1;
-  return descending ? (ym - xm) : (xm - ym);
+// Comparator for sort, following MATLAB: complex arrays sort by abs and
+// then angle (or by real then imaginary part with ComparisonMethod
+// 'real'); NaN (missing) values go last when ascending and first when
+// descending, unless MissingPlacement says otherwise. Ties keep their
+// original order.
+function sortComparator({ descending, nanFirst, byAbs }) {
+  const keys = (v) => (byAbs ? [Math.hypot(v.re, v.im), Math.atan2(v.im, v.re)] : [v.re, v.im]);
+  return (x, y) => {
+    const xNaN = Number.isNaN(x.re) || Number.isNaN(x.im), yNaN = Number.isNaN(y.re) || Number.isNaN(y.im);
+    if (xNaN || yNaN) {
+      if (xNaN && yNaN) return x.idx - y.idx;
+      return (xNaN ? 1 : -1) * (nanFirst ? -1 : 1);
+    }
+    const [x1, x2] = keys(x), [y1, y2] = keys(y);
+    const d = x1 !== y1 ? (x1 < y1 ? -1 : 1) : x2 !== y2 ? (x2 < y2 ? -1 : 1) : 0;
+    return (descending ? -d : d) || x.idx - y.idx;
+  };
 }
 
 export function registerArrayOps(reg) {
@@ -179,12 +191,28 @@ export function registerArrayOps(reg) {
         return nargout >= 2 ? [out, new Mat(a.rows, a.cols, Float64Array.from(order, i => i + 1))] : [out];
       }
       let dim = a.rows === 1 ? 2 : 1;
-      let descending = false;
+      let descending = false, placement = 'auto', method = 'auto';
       for (let i = 1; i < args.length; i++) {
         const arg = args[i];
-        if (arg.isChar) descending = arg.toJSString().toLowerCase() === 'descend';
-        else dim = dimArg(arg, 'sort');
+        if (!arg.isChar) { dim = dimArg(arg, 'sort'); continue; }
+        const opt = arg.toJSString().toLowerCase();
+        if (opt === 'ascend' || opt === 'descend') { descending = opt === 'descend'; continue; }
+        if (opt !== 'missingplacement' && opt !== 'comparisonmethod') throw new MatlabError(`sort: unknown option '${arg.toJSString()}'`);
+        if (i + 1 >= args.length || !args[i + 1].isChar) throw new MatlabError(`sort: ${opt === 'missingplacement' ? 'MissingPlacement' : 'ComparisonMethod'} needs a value`);
+        const val = args[++i].toJSString().toLowerCase();
+        if (opt === 'missingplacement') {
+          if (!['auto', 'first', 'last'].includes(val)) throw new MatlabError("sort: MissingPlacement must be 'auto', 'first' or 'last'");
+          placement = val;
+        } else {
+          if (!['auto', 'real', 'abs'].includes(val)) throw new MatlabError("sort: ComparisonMethod must be 'auto', 'real' or 'abs'");
+          method = val;
+        }
       }
+      const compare = sortComparator({
+        descending,
+        nanFirst: placement === 'first' || (placement === 'auto' && descending),
+        byAbs: method === 'abs' || (method === 'auto' && a.isComplex),
+      });
       if (dim >= 3) {
         // Sorting along a singleton dimension leaves A as it is.
         const ones = Mat.zeros(a.rows, a.cols); ones.re.fill(1);
@@ -196,7 +224,7 @@ export function registerArrayOps(reg) {
       const sortSlice = (getter, setter, count) => {
         const entries = [];
         for (let i = 0; i < count; i++) entries.push({ ...getter(i), idx: i });
-        entries.sort((x, y) => compareForSort(x, y, descending));
+        entries.sort(compare);
         entries.forEach((entry, i) => setter(i, entry));
       };
       if (dim === 1) {
@@ -257,7 +285,8 @@ export function registerArrayOps(reg) {
         if (g === undefined) { g = uniq.length; groups.set(key, g); uniq.push({ re, im, first: k, slot: g }); }
         ic[k] = g;
       }
-      const order = stable ? uniq.slice() : uniq.slice().sort((x, y) => compareForSort(x, y, false) || (x.im - y.im) || (x.first - y.first));
+      const compare = sortComparator({ descending: false, nanFirst: false, byAbs: a.isComplex });
+      const order = stable ? uniq.slice() : uniq.slice().sort((x, y) => compare({ ...x, idx: x.first }, { ...y, idx: y.first }));
       const rank = new Map(order.map((u, pos) => [u.slot, pos]));
       const n = order.length;
       const re = new Float64Array(n), ia = new Float64Array(n);
