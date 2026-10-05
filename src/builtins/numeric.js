@@ -1,4 +1,4 @@
-// numeric.js — polyfit/polyval/interp1. polyfit reuses the same
+// numeric.js — polyfit/polyval (interp1 lives in interp.js). polyfit reuses the same
 // normal-equations least-squares approach as the `\` operator's
 // non-square case (see linalg.js and the README's math.js-limitations
 // section for the numerical-stability caveat that implies).
@@ -50,25 +50,6 @@ export function registerNumeric(reg) {
       }
       const flat = (coeffs.valueOf ? coeffs.valueOf() : coeffs).map(row => Array.isArray(row) ? row[0] : row);
       return [Mat.fromRows([flat])];
-    },
-  });
-
-  reg.set('interp1', {
-    fn: (args) => {
-      const x = args[0], y = args[1], xi = args[2];
-      if (x.numel !== y.numel) throw new MatlabError('interp1: x and y must have the same number of elements');
-      const pairs = Array.from(x.re).map((v, i) => [v, y.re[i]]).sort((a, b) => a[0] - b[0]);
-      const sx = pairs.map(p => p[0]), sy = pairs.map(p => p[1]);
-      const out = Mat.mapElementwise(xi, (xr) => {
-        if (xr < sx[0] || xr > sx[sx.length - 1]) return [NaN, 0]; // out-of-range -> NaN, matching MATLAB's default
-        if (xr === sx[0]) return [sy[0], 0];
-        if (xr === sx[sx.length - 1]) return [sy[sy.length - 1], 0];
-        let i = 0;
-        while (i < sx.length - 1 && sx[i + 1] < xr) i++;
-        const t = (xr - sx[i]) / (sx[i + 1] - sx[i]);
-        return [sy[i] + t * (sy[i + 1] - sy[i]), 0];
-      });
-      return [out];
     },
   });
 }

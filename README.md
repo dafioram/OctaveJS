@@ -87,15 +87,29 @@ where real MATLAB does, e.g. `sqrt(-1)`, `asin(2)`); `sum`, `prod`, `mean`,
 them, the `'all'` and `'omitnan'`/`'includenan'` options; `sort` (with index output, `'ascend'`/`'descend'`), `unique`,
 `find` (linear or `[row,col]`/`[row,col,val]` forms, with optional count
 and `'first'`/`'last'`), `any`, `all`, `isnan`, `isinf`, `isfinite`;
-`fliplr`, `flipud`, `flip`, `repmat`, `cat`/`horzcat`/`vertcat`; `size`,
+`fliplr`, `flipud`, `flip`, `repmat`, `cat`/`horzcat`/`vertcat`, `permute`, `squeeze`; `size`,
 `length`, `numel`, `reshape`, `diag`, `triu`, `tril`, `det`, `trace`,
 `rank`, `norm`, `dot`, `cross`, `inv`, `pinv`, `eig`, `svd`, `lu`, `qr`,
-`kron`, `nnz`; `fft`/`ifft` (vectors or matrix columns, with length and
+`kron`, `nnz`, `expm`, `sqrtm`, `chol`, `cond`, `null`, `orth`; `fft`/`ifft` (vectors or matrix columns, with length and
 dimension arguments); `polyfit`, `polyval`, `roots`, `conv`, `deconv`,
-`filter`, `interp1` (linear interpolation); `magic`, `meshgrid`, `ndgrid`,
+`filter`, `polyder`, `polyint`; `magic`, `meshgrid`, `ndgrid`,
 `diff`, `trapz`, `cumtrapz`, `circshift`, `sub2ind`/`ind2sub`;
 `factorial`, `nchoosek` (count or combinations), `primes`, `isprime`,
 `gcd`, `lcm`.
+
+**Solvers, integration and interpolation:** `ode45`, `ode23`
+(non-stiff; MATLAB's own Dormand-Prince / Bogacki-Shampine methods and
+step-size control, so the output points match MATLAB's), `ode23s` and
+`ode15s` for stiff problems (both use MATLAB's Rosenbrock method from
+`ode23s`), with `odeset`/`odeget`, solution structures and `deval`;
+`fzero`, `fminbnd`, `fminsearch` (ports of MATLAB's algorithms; e.g.
+`fminsearch` on Rosenbrock's function takes MATLAB's 85 iterations) with
+`optimset`/`optimget`; `integral` (adaptive Gauss-Kronrod, infinite
+limits, `'ArrayValued'`, `'Waypoints'`), `integral2`, `quad`; `interp1`
+(`'linear'`, `'nearest'`, `'next'`, `'previous'`, `'pchip'`, `'spline'`,
+extrapolation), `interp2` (`'linear'`, `'nearest'`, `'cubic'`,
+`'spline'`), `spline` (not-a-knot or clamped), `pchip`, and
+`ppval`/`mkpp`/`unmkpp`. Long-running solves can be interrupted with Stop.
 
 **Comparison & operators as functions:** `isequal`, `isequaln`,
 `ismember` (numbers or cell arrays of strings, with the location output),
@@ -294,7 +308,9 @@ src/builtins/   elementwise.js, reduction.js, linalg.js, fft.js,
                 system.js, plotting.js (2-D plots, figures, handles,
                 saving, drawnow/pause), plotting3d.js (3-D, images,
                 color), io.js, containers.js, errors.js,
-                logic.js, mathext.js, strings.js, index.js — the
+                logic.js, mathext.js, strings.js, ode.js (ODE
+                solvers), optim.js (fzero, fmin*, integral), interp.js
+                (interp1/2, spline, pchip), numutil.js, index.js — the
                 function library, registered into the interpreter.
 src/mat5/       mat5.js — the MAT5 binary codec.
 src/plot/       style.js (MATLAB color order, colors, line specs),
@@ -310,7 +326,7 @@ src/ui/         main.js, backend.js, vfs.js, matlab-lang.js, styles.css
                   fallback) backend, the IndexedDB file store, CodeMirror
                   setup, drawing figures with Plotly. Everything here is what actually
                   needs a browser; everything above it is plain, testable JS.
-test/           harness.js + eight test files — run with `npm test`.
+test/           harness.js + nine test files — run with `npm test`.
 build.mjs       esbuild bundling script -> dist/ (main.js and worker.js).
 ```
 

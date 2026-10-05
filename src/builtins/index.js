@@ -18,6 +18,9 @@ import { registerContainers } from './containers.js';
 import { registerLogic } from './logic.js';
 import { registerMathExt } from './mathext.js';
 import { registerStrings } from './strings.js';
+import { registerOde } from './ode.js';
+import { registerOptim } from './optim.js';
+import { registerInterp } from './interp.js';
 
 export function buildBuiltinsRegistry() {
   const reg = new Map();
@@ -36,5 +39,8 @@ export function buildBuiltinsRegistry() {
   registerLogic(reg);
   registerMathExt(reg);
   registerStrings(reg);
+  registerOde(reg);
+  registerOptim(reg);
+  registerInterp(reg);
   return reg;
 }

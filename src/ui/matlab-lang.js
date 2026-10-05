@@ -55,6 +55,9 @@ const BUILTIN_HINTS = new Set([
   'bone', 'copper', 'pink', 'white', 'lines', 'colorbar', 'clim', 'caxis', 'view', 'zlabel', 'zlim',
   'shading', 'peaks', 'sphere', 'saveas', 'exportgraphics', 'print', 'drawnow', 'pause',
   'permute', 'ipermute', 'squeeze',
+  'ode45', 'ode23', 'ode23s', 'ode15s', 'odeset', 'odeget', 'deval', 'fzero', 'fminbnd', 'fminsearch',
+  'optimset', 'optimget', 'integral', 'integral2', 'quad', 'interp2', 'spline', 'pchip', 'ppval', 'mkpp',
+  'unmkpp', 'polyder', 'polyint', 'expm', 'sqrtm', 'chol', 'cond', 'null', 'orth',
 ]);
 
 function endsValue(prev) {
