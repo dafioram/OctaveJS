@@ -5,7 +5,7 @@
   "main": "src/ui/main.js",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node test/run_tests.mjs && node test/run_tests2.mjs && node test/run_tests3.mjs && node test/run_tests4.mjs && node test/run_tests5.mjs && node test/run_tests6.mjs && node test/run_tests7.mjs && node test/run_tests8.mjs"
+    "test": "node test/run_tests.mjs && node test/run_tests2.mjs && node test/run_tests3.mjs && node test/run_tests4.mjs && node test/run_tests5.mjs && node test/run_tests6.mjs && node test/run_tests7.mjs && node test/run_tests8.mjs && node test/run_tests9.mjs"
   },
   "keywords": [],
   "author": "",

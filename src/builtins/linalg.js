@@ -454,5 +454,129 @@ export function registerLinalg(reg) {
     }
     return new Mat(n, m, re, im);
   }
+  // ---- matrix functions and decompositions ----
+  reg.set('expm', {
+    fn: (args) => { requireSquare(args[0], 'expm'); return [fromRowMajor(math.expm(math.matrix(toRowMajor(args[0]))).valueOf())]; },
+  });
+  // sqrtm: math.js's Denman–Beavers iteration; matrices it can't handle
+  // (e.g. negative eigenvalues, whose square root is complex) go through
+  // the eigendecomposition V*sqrt(D)/V.
+  reg.set('sqrtm', {
+    fn: (args) => {
+      const a = args[0]; requireSquare(a, 'sqrtm');
+      try {
+        const r = fromRowMajor(math.sqrtm(math.matrix(toRowMajor(a))).valueOf());
+        if (Array.from(r.re).every(Number.isFinite)) return [r];
+      } catch (e) { /* fall through */ }
+      const { eigenvectors } = math.eigs(toRowMajor(a), { eigenvectors: true });
+      const n = a.rows;
+      const V = math.matrix(Array.from({ length: n }, (_, r) => eigenvectors.map(ev => (ev.vector.valueOf ? ev.vector.valueOf() : ev.vector)[r])));
+      const D = math.diag(eigenvectors.map(ev => math.sqrt(math.complex(ev.value))));
+      const out = fromRowMajor(math.multiply(math.multiply(V, D), math.inv(V)).valueOf());
+      if (out.im && out.im.every(x => Math.abs(x) <= 1e-12 * Math.max(1, ...Array.from(out.re, Math.abs)))) out.im = null;
+      return [out];
+    },
+  });
+
+  // R = chol(A) (upper, R'*R = A) | chol(A, 'lower') | [R, p] = chol(A)
+  reg.set('chol', {
+    fn: (args, nargout) => {
+      const a = args[0]; requireSquare(a, 'chol');
+      if (a.isComplex) throw new MatlabError('chol: complex matrices are not supported');
+      const lower = args.length >= 2 && args[1].isChar && args[1].toJSString().toLowerCase() === 'lower';
+      const n = a.rows;
+      const R = Mat.zeros(n, n);
+      let fail = 0;
+      // Uses the upper triangle of A, as MATLAB does.
+      for (let j = 0; j < n && !fail; j++) {
+        let d = a.get2(j, j);
+        for (let k = 0; k < j; k++) d -= R.get2(k, j) ** 2;
+        if (!(d > 0)) { fail = j + 1; break; }
+        const rjj = Math.sqrt(d);
+        R.set2(j, j, rjj);
+        for (let i = j + 1; i < n; i++) {
+          let v = a.get2(j, i);
+          for (let k = 0; k < j; k++) v -= R.get2(k, j) * R.get2(k, i);
+          R.set2(j, i, v / rjj);
+        }
+      }
+      if (fail && nargout < 2) throw new MatlabError('Matrix must be positive definite.');
+      const q = fail ? fail - 1 : n; // the leading block that factored
+      let out = R;
+      if (fail) {
+        out = Mat.zeros(q, q);
+        for (let c = 0; c < q; c++) for (let r = 0; r <= c; r++) out.set2(r, c, R.get2(r, c));
+      }
+      if (lower) out = transposeAny(out, false);
+      return nargout >= 2 ? [out, Mat.scalar(fail)] : [out];
+    },
+  });
+
+  // cond(A) (2-norm, from the singular values) | cond(A, p) for p = 1, Inf, 'fro'
+  reg.set('cond', {
+    fn: (args, nargout, ctx) => {
+      const a = args[0];
+      if (a.isEmpty) return [Mat.scalar(0)];
+      if (args.length < 2 || (!args[1].isChar && args[1].toScalarNumber() === 2)) {
+        const s = computeSVD(a).singularValues;
+        const smin = s[s.length - 1];
+        return [Mat.scalar(smin === 0 ? Infinity : s[0] / smin)];
+      }
+      requireSquare(a, 'cond');
+      const norm = ctx.interp.builtins.get('norm').fn;
+      let inv;
+      try { inv = fromRowMajor(math.inv(toRowMajor(a))); } catch (e) { return [Mat.scalar(Infinity)]; }
+      return [Mat.scalar(norm([a, args[1]])[0].re[0] * norm([inv, args[1]])[0].re[0])];
+    },
+  });
+
+  // Orthonormal bases from the SVD: orth(A) spans the range, null(A) the
+  // null space. Rank uses MATLAB's tolerance max(size(A))*eps(max(s)).
+  const rangeAndRank = (a) => {
+    const { U, V, singularValues: s } = computeSVD(a);
+    const smax = s.length ? s[0] : 0;
+    const tol = Math.max(a.rows, a.cols) * (smax === 0 ? 0 : 2 ** (Math.floor(Math.log2(smax)) - 52));
+    return { U, V, r: s.filter(v => v > tol).length };
+  };
+  const columnsOf = (M, count) => {
+    const out = Mat.zeros(M.rows, count);
+    out.re.set(M.re.subarray(0, M.rows * count));
+    return out;
+  };
+  reg.set('orth', {
+    fn: (args) => {
+      if (args[0].isComplex) throw new MatlabError('orth: complex matrices are not supported');
+      const { U, r } = rangeAndRank(args[0]);
+      return [columnsOf(U, r)];
+    },
+  });
+  reg.set('null', {
+    fn: (args) => {
+      const a = args[0];
+      if (a.isComplex) throw new MatlabError('null: complex matrices are not supported');
+      const n = a.cols;
+      const { V, r } = rangeAndRank(a);
+      // V's first r columns span the row space; complete them to an
+      // orthonormal basis of R^n and keep the new vectors (the null space).
+      const basis = [];
+      for (let c = 0; c < r; c++) basis.push(Array.from(V.re.subarray(c * n, (c + 1) * n)));
+      const out = [];
+      for (let j = 0; j < n && basis.length < n; j++) {
+        let v = Array.from({ length: n }, (_, i) => (i === j ? 1 : 0));
+        for (let pass = 0; pass < 2; pass++) {
+          for (const b of basis) {
+            const d = b.reduce((acc, bi, i) => acc + bi * v[i], 0);
+            v = v.map((vi, i) => vi - d * b[i]);
+          }
+        }
+        const len = Math.hypot(...v);
+        if (len > 1e-6) { v = v.map(x => x / len); basis.push(v); out.push(v); }
+      }
+      const N = Mat.zeros(n, out.length);
+      out.forEach((v, c) => v.forEach((x, i) => { N.re[c * n + i] = Math.abs(x) < 1e-15 ? 0 : x; }));
+      return [N];
+    },
+  });
+
   _registerLinalgHooks({ inverse, solve });
 }
