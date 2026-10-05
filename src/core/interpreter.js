@@ -479,9 +479,29 @@ export class Interpreter {
     return mat;
   }
 
+  // Subscripts past the second must address the (singleton) trailing
+  // dimensions of a 2-D array: A(i, j, 1), A(:, :, end), A(i, j, :). Those
+  // are dropped so the rest of indexing sees two subscripts; anything else
+  // would need an N-D array.
+  _dropTrailingSubscripts(argNodes, scope, assigning) {
+    if (argNodes.length <= 2) return argNodes;
+    for (let k = 2; k < argNodes.length; k++) {
+      if (argNodes[k].type === 'FullColon') continue;
+      this.endStack.push(1);
+      let positions;
+      try { positions = this._resolvePositions(this.evalExpr(argNodes[k], scope), 1); } finally { this.endStack.pop(); }
+      if (positions.length === 1 && positions[0] === 0) continue;
+      if (assigning) throw new MatlabError(`Assignment to index ${positions.map(p => p + 1).join(', ') || '(none)'} in position ${k + 1} would create an N-D array, which is not supported`);
+      if (positions.some(p => p > 0)) throw new MatlabError(`Index in position ${k + 1} exceeds array bounds. Index must not exceed 1.`, 'MATLAB:badsubscript');
+      throw new MatlabError(`Indexing in position ${k + 1} would create an N-D array, which is not supported`);
+    }
+    return argNodes.slice(0, 2);
+  }
+
   // Resolves the target positions of an assignment into a cell/struct
   // array, and the (possibly larger) size the array must grow to.
   _assignSelection(arr, args, scope) {
+    args = this._dropTrailingSubscripts(args, scope, true);
     if (args.length === 1) {
       let positions;
       if (args[0].type === 'FullColon') positions = Array.from({ length: arr.numel }, (_, k) => k);
@@ -549,6 +569,7 @@ export class Interpreter {
   }
 
   _containerDelete(arr, args, scope) {
+    args = this._dropTrailingSubscripts(args, scope, false);
     const drop = new Set();
     let rows, cols;
     if (args.length === 1) {
@@ -887,6 +908,7 @@ export class Interpreter {
   // cell/struct array, plus the shape of the result.
   _readSelection(arr, argNodes, scope) {
     if (argNodes.length === 0) throw new MatlabError('Empty index expression is not supported');
+    argNodes = this._dropTrailingSubscripts(argNodes, scope, false);
     if (argNodes.length === 1) {
       const node = argNodes[0];
       if (node.type === 'FullColon') return { positions: Array.from({ length: arr.numel }, (_, k) => k), rows: arr.numel, cols: 1 };
@@ -1030,6 +1052,7 @@ export class Interpreter {
   indexRead(mat, argNodes, scope) {
     if (!(mat instanceof Mat)) return this.indexValue(mat, argNodes, scope);
     if (argNodes.length === 0) throw new MatlabError('Empty index expression is not supported');
+    argNodes = this._dropTrailingSubscripts(argNodes, scope, false);
     if (argNodes.length === 1) return this.indexReadLinear(mat, argNodes[0], scope);
     if (argNodes.length === 2) return this.indexRead2D(mat, argNodes[0], argNodes[1], scope);
     throw new MatlabError('Indexing with more than 2 subscripts is not supported (N-D arrays are out of scope)');
@@ -1105,6 +1128,7 @@ export class Interpreter {
   // ---- indexing (assignment, incl. growth & deletion) ----
 
   indexedAssign(mat, argNodes, scope, rhs) {
+    argNodes = this._dropTrailingSubscripts(argNodes, scope, true);
     if (argNodes.length === 1) return this._assignLinear(mat, argNodes[0], scope, rhs);
     if (argNodes.length === 2) return this._assign2D(mat, argNodes[0], argNodes[1], scope, rhs);
     throw new MatlabError('Indexed assignment with more than 2 subscripts is not supported');

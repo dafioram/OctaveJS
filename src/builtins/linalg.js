@@ -8,7 +8,7 @@
 // README's "math.js limitations" section.
 
 import * as math from 'mathjs';
-import { Mat, Cell, StructArray, MatlabError } from '../core/values.js';
+import { Mat, Cell, StructArray, MatlabError, shape2D } from '../core/values.js';
 import { _registerLinalgHooks, transposeContainer } from '../core/interpreter.js';
 
 function toRowMajor(mat) {
@@ -160,11 +160,20 @@ export function registerLinalg(reg) {
   reg.set('size', {
     fn: (args, nargout) => {
       const a = args[0];
+      const sizeOf = (d) => (d === 1 ? a.rows : d === 2 ? a.cols : 1); // dims 3+ are singletons
       if (args.length >= 2) {
-        const dim = Math.round(args[1].toScalarNumber());
-        return [Mat.scalar(dim === 1 ? a.rows : dim === 2 ? a.cols : 1)];
+        // size(A, dim) | size(A, [d1 d2 ...]) | size(A, d1, d2, ...)
+        const dims = args.slice(1).flatMap(v => Array.from(v.re));
+        for (const d of dims) if (!Number.isInteger(d) || d < 1) throw new MatlabError('size: dimension argument must be a positive integer');
+        const sizes = dims.map(sizeOf);
+        if (nargout >= 2) {
+          if (nargout > sizes.length) throw new MatlabError('size: more outputs than requested dimensions');
+          return sizes.map(n => Mat.scalar(n));
+        }
+        return [Mat.fromRows([sizes])];
       }
-      if (nargout >= 2) return [Mat.scalar(a.rows), Mat.scalar(a.cols)];
+      // [r, c, p, ...] = size(A): outputs past the second are 1.
+      if (nargout >= 2) return Array.from({ length: nargout }, (_, k) => Mat.scalar(sizeOf(k + 1)));
       return [Mat.fromRows([[a.rows, a.cols]])];
     },
   });
@@ -181,15 +190,20 @@ export function registerLinalg(reg) {
   reg.set('reshape', {
     fn: (args) => {
       const a = args[0];
-      let r, c;
-      if (args.length === 2 && args[1].numel === 2) { r = args[1].re[0]; c = args[1].re[1]; }
-      else if (args.length === 3) {
-        const rArg = args[1], cArg = args[2];
-        if (rArg.isEmpty) { c = cArg.toScalarNumber(); r = a.numel / c; }
-        else if (cArg.isEmpty) { r = rArg.toScalarNumber(); c = a.numel / r; }
-        else { r = rArg.toScalarNumber(); c = cArg.toScalarNumber(); }
-      } else throw new MatlabError('reshape expects reshape(A, r, c) or reshape(A, [r c])');
-      r = Math.round(r); c = Math.round(c);
+      // reshape(A, [m n ...]) | reshape(A, m, n, ...), with at most one []
+      // size worked out from the others.
+      let dims;
+      if (args.length === 2 && args[1].numel >= 2) dims = Array.from(args[1].re);
+      else if (args.length >= 3) dims = args.slice(1).map(v => (v.isEmpty ? null : v.toScalarNumber()));
+      else throw new MatlabError('reshape expects reshape(A, m, n) or reshape(A, [m n])');
+      const free = dims.filter(d => d === null).length;
+      if (free > 1) throw new MatlabError('reshape: only one size can be []');
+      if (free === 1) {
+        const known = dims.reduce((p, d) => (d === null ? p : p * d), 1);
+        if (known === 0 || a.numel % known !== 0) throw new MatlabError(`reshape: ${a.numel} elements cannot be divided evenly by the given sizes`);
+        dims = dims.map(d => (d === null ? a.numel / known : d));
+      }
+      const [r, c] = shape2D(dims, 'reshape');
       if (r * c !== a.numel) throw new MatlabError(`reshape: cannot reshape ${a.sizeStr()} (${a.numel} elements) to ${r}x${c}`);
       if (a instanceof Cell) return [new Cell(r, c, a.data.slice())];
       if (a instanceof StructArray) return [new StructArray(r, c, a.fieldNames, a.data.map(el => new Map(el)), a.classOverride)];

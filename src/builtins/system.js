@@ -2,21 +2,18 @@
 // printing (disp/fprintf/sprintf/num2str), and workspace management
 // (who/whos/clear/exist), plus feval/arrayfun/deal.
 
-import { Mat, Cell, FunctionHandle, MatlabError, colonRange, valueClassName } from '../core/values.js';
+import { Mat, Cell, FunctionHandle, MatlabError, colonRange, valueClassName, shapeArgs } from '../core/values.js';
 import { formatValue } from '../core/interpreter.js';
 import { parse } from '../core/parser.js';
 import { HELP_DATA } from './help-data.js';
 
-function shapeFromArgs(args, ignoreTrailingString = true) {
+// Sizes for zeros/ones/rand/...: trailing class names ('double',
+// 'like', ...) are ignored; no size arguments gives a scalar.
+function shapeFromArgs(args, fname) {
   let a = args;
-  if (ignoreTrailingString && a.length > 0 && a[a.length - 1].isChar) a = a.slice(0, -1);
+  while (a.length > 0 && a[a.length - 1].isChar) a = a.slice(0, -1);
   if (a.length === 0) return [1, 1];
-  if (a.length === 1) {
-    if (a[0].numel === 2) return [Math.round(a[0].re[0]), Math.round(a[0].re[1])];
-    const n = Math.round(a[0].toScalarNumber());
-    return [n, n];
-  }
-  return [Math.round(a[0].toScalarNumber()), Math.round(a[1].toScalarNumber())];
+  return shapeArgs(a, fname);
 }
 
 function boxMuller() {
@@ -99,10 +96,12 @@ export function registerSystem(reg) {
   // "check scope first" lookup already gives us that for free).
   reg.set('pi', { fn: () => [Mat.scalar(Math.PI)] });
   reg.set('e', { fn: () => [Mat.scalar(Math.E)] });
-  reg.set('Inf', { fn: () => [Mat.scalar(Infinity)] });
-  reg.set('inf', { fn: () => [Mat.scalar(Infinity)] });
-  reg.set('NaN', { fn: () => [Mat.scalar(NaN)] });
-  reg.set('nan', { fn: () => [Mat.scalar(NaN)] });
+  // Inf(2, 3), NaN(n), ... fill an array, like zeros.
+  const constFill = (v, name) => ({ fn: (args) => { const [r, c] = shapeFromArgs(args, name); const m = Mat.zeros(r, c); m.re.fill(v); return [m]; } });
+  reg.set('Inf', constFill(Infinity, 'Inf'));
+  reg.set('inf', constFill(Infinity, 'inf'));
+  reg.set('NaN', constFill(NaN, 'NaN'));
+  reg.set('nan', constFill(NaN, 'nan'));
   reg.set('eps', { fn: () => [Mat.scalar(Number.EPSILON)] });
   reg.set('i', { fn: () => [Mat.complexScalar(0, 1)] });
   reg.set('j', { fn: () => [Mat.complexScalar(0, 1)] });
@@ -140,25 +139,25 @@ export function registerSystem(reg) {
   });
 
   // true/false are ordinary functions in MATLAB, so true(2,3) works too.
-  const logicalFill = (v) => (args) => {
-    const [r, c] = shapeFromArgs(args);
+  const logicalFill = (v, name) => (args) => {
+    const [r, c] = shapeFromArgs(args, name);
     const m = Mat.zeros(r, c); m.re.fill(v); m.isLogical = true;
     return [m];
   };
-  reg.set('true', { fn: logicalFill(1) });
-  reg.set('false', { fn: logicalFill(0) });
+  reg.set('true', { fn: logicalFill(1, 'true') });
+  reg.set('false', { fn: logicalFill(0, 'false') });
 
-  reg.set('zeros', { fn: (args) => { const [r, c] = shapeFromArgs(args); return [Mat.zeros(r, c)]; } });
-  reg.set('ones', { fn: (args) => { const [r, c] = shapeFromArgs(args); const m = Mat.zeros(r, c); m.re.fill(1); return [m]; } });
-  reg.set('eye', { fn: (args) => { const [r, c] = shapeFromArgs(args); const m = Mat.zeros(r, c); for (let k = 0; k < Math.min(r, c); k++) m.set2(k, k, 1); return [m]; } });
-  reg.set('rand', { fn: (args) => { const [r, c] = shapeFromArgs(args); const m = Mat.zeros(r, c); for (let k = 0; k < m.numel; k++) m.re[k] = Math.random(); return [m]; } });
-  reg.set('randn', { fn: (args) => { const [r, c] = shapeFromArgs(args); const m = Mat.zeros(r, c); for (let k = 0; k < m.numel; k++) m.re[k] = boxMuller(); return [m]; } });
+  reg.set('zeros', { fn: (args) => { const [r, c] = shapeFromArgs(args, 'zeros'); return [Mat.zeros(r, c)]; } });
+  reg.set('ones', { fn: (args) => { const [r, c] = shapeFromArgs(args, 'ones'); const m = Mat.zeros(r, c); m.re.fill(1); return [m]; } });
+  reg.set('eye', { fn: (args) => { const [r, c] = shapeFromArgs(args, 'eye'); const m = Mat.zeros(r, c); for (let k = 0; k < Math.min(r, c); k++) m.set2(k, k, 1); return [m]; } });
+  reg.set('rand', { fn: (args) => { const [r, c] = shapeFromArgs(args, 'rand'); const m = Mat.zeros(r, c); for (let k = 0; k < m.numel; k++) m.re[k] = Math.random(); return [m]; } });
+  reg.set('randn', { fn: (args) => { const [r, c] = shapeFromArgs(args, 'randn'); const m = Mat.zeros(r, c); for (let k = 0; k < m.numel; k++) m.re[k] = boxMuller(); return [m]; } });
   reg.set('randi', {
     fn: (args) => {
       let hi = 1, lo = 1;
       if (args[0].numel === 2) { lo = Math.round(args[0].re[0]); hi = Math.round(args[0].re[1]); }
       else { hi = Math.round(args[0].toScalarNumber()); lo = 1; }
-      const [r, c] = shapeFromArgs(args.slice(1));
+      const [r, c] = shapeFromArgs(args.slice(1), 'randi');
       const m = Mat.zeros(r, c);
       for (let k = 0; k < m.numel; k++) m.re[k] = lo + Math.floor(Math.random() * (hi - lo + 1));
       return [m];

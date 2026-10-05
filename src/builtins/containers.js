@@ -3,7 +3,7 @@
 // strjoin, struct, fieldnames, isfield, rmfield, isstruct, getfield,
 // setfield, struct2cell, numfields.
 
-import { Mat, Cell, StructArray, FunctionHandle, MatlabError, valueClassName } from '../core/values.js';
+import { Mat, Cell, StructArray, FunctionHandle, MatlabError, valueClassName, shapeArgs } from '../core/values.js';
 
 function isText(v) { return v instanceof Mat && v.isChar; }
 function textOf(v, what) {
@@ -14,12 +14,7 @@ function textOf(v, what) {
 // Sizes from (n), (m, n) or ([m n]) arguments, as used by cell().
 function sizeArgs(args) {
   if (args.length === 0) return [0, 0];
-  if (args.length === 1) {
-    if (args[0].numel === 2) return [Math.round(args[0].re[0]), Math.round(args[0].re[1])];
-    const n = Math.round(args[0].toScalarNumber());
-    return [n, n];
-  }
-  return [Math.round(args[0].toScalarNumber()), Math.round(args[1].toScalarNumber())];
+  return shapeArgs(args, 'cell');
 }
 
 // The k-th element of an array as a 1x1 value of the same kind.

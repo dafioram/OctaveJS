@@ -212,5 +212,61 @@ const isLogical = (interp, name) => interp.workspace.get(name).isLogical;
   check("3.' and 1.5.^2", [fmtVar(interp, 'f'), fmtVar(interp, 'g')], [3, 2.25]);
 }
 
+// ---- dimensions past the second: 2-D arrays have singleton trailing dims ----
+{
+  const { interp, run } = makeInterp();
+  const v = (name) => fmtVar(interp, name);
+  const sz = (name) => { const x = interp.workspace.get(name); return [x.rows, x.cols]; };
+  // N-D requests used to be silently truncated to 2-D; now they error.
+  checkThrows('zeros(2,2,2) is N-D', () => run('zeros(2, 2, 2)'), /N-D arrays are not supported/);
+  checkThrows('ones([2 3 4]) is N-D', () => run('ones([2 3 4])'), /N-D arrays are not supported/);
+  checkThrows('rand(2,2,2) is N-D', () => run('rand(2, 2, 2)'), /N-D/);
+  checkThrows('cell(2,2,2) is N-D', () => run('cell(2, 2, 2)'), /N-D/);
+  checkThrows('cat(3, A, B) is N-D', () => run('cat(3, [1 2], [3 4])'), /N-D array/);
+  checkThrows('reshape to 2x2x2 is N-D', () => run('reshape(1:8, 2, 2, 2)'), /N-D/);
+  checkThrows('repmat(A, [2 2 2]) is N-D', () => run('repmat(1, [2 2 2])'), /N-D/);
+  checkThrows('non-integer size', () => run('zeros(2.5)'), /must be integers/);
+  run('a = zeros(2, 3, 1); b = ones([2 3 1 1]); c = cell(2, 3, 1); d = NaN(2, 3); e = Inf(2); f = randi(5, 2, 3, 1); g = true(2, 1, 1);');
+  check('trailing singleton sizes are fine', ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(sz), [[2, 3], [2, 3], [2, 3], [2, 3], [2, 2], [2, 3], [2, 1]]);
+  run('h = cat(3, [], [3 4], []); k = reshape(1:6, 2, [], 1); m = repmat(7, [2 3 1]);');
+  check('cat(3) of one array, reshape/repmat with trailing 1s', [v('h').re, sz('k'), sz('m')], [[3, 4], [2, 3], [2, 3]]);
+
+  // Along dimension 3 a 2-D array is a single page: these return A.
+  run('A = [3 1; 2 4]; s3 = sort(A, 3); [~, i3] = sort(A, 3); f3 = flip(A, 3); n3 = any([1 0; 3 4], 3); l3 = all([1 0; 3 4], 3);');
+  check('sort(A, 3) leaves A', [v('s3').re, v('i3').re], [[3, 2, 1, 4], [1, 1, 1, 1]]);
+  check('flip(A, 3) leaves A', v('f3').re, [3, 2, 1, 4]);
+  check('any/all(A, 3) test each element', [v('n3').re, v('l3').re], [[1, 1, 0, 1], [1, 1, 0, 1]]);
+  // any/all used to ignore their dimension argument entirely.
+  run("p = any([1 0; 0 0], 2); q = all([1 1; 0 1], 2); r = all([1 1; 0 1], 'all'); t = any([0 0 1], 1); u = all(zeros(0, 3));");
+  check('any/all(A, 2)', [v('p'), v('q')], [{ rows: 2, cols: 1, re: [1, 0], im: null }, { rows: 2, cols: 1, re: [1, 0], im: null }]);
+  check("all(A, 'all')", v('r'), 0);
+  check('any(row, 1) works element by element', v('t').re, [0, 0, 1]);
+  check('all of a 0x3 array is 1x3 true', v('u').re, [1, 1, 1]);
+
+  // size with more outputs or dimensions than 2.
+  run('[r1, c1, p1] = size([1 2 3; 4 5 6]); s12 = size(ones(2, 3), [1 2]); [m2, n2] = size(ones(2, 3), [2 1]); s3 = size(ones(2, 3), 3); s23 = size(ones(2, 3), 2, 3);');
+  check('[r, c, p] = size(A)', [v('r1'), v('c1'), v('p1')], [2, 3, 1]);
+  check('size(A, [1 2]) and [m, n] = size(A, [2 1])', [v('s12').re, v('m2'), v('n2')], [[2, 3], 3, 2]);
+  check('size(A, 3) and size(A, 2, 3)', [v('s3'), v('s23').re], [1, [3, 1]]);
+
+  // Trailing subscripts that address the singleton dimensions.
+  run('B = [1 2; 3 4]; x1 = B(:, :, 1); x2 = B(2, end, end); x3 = B(1, 2, :); B(:, 1, 1) = 0; c = {1, 2; 3, 4}; x4 = c{2, 1, 1}; st(2).f = 7; x5 = st(1, 2, 1).f;');
+  check('A(:, :, 1), A(i, end, end), A(i, j, :)', [v('x1').re, v('x2'), v('x3')], [[1, 3, 2, 4], 4, 2]);
+  check('assignment with a trailing 1', v('B').re, [0, 0, 2, 4]);
+  check('cell and struct trailing subscripts', [v('x4'), v('x5')], [3, 7]);
+  checkThrows('third subscript out of range', () => run('B(1, 1, 2)'), /position 3 exceeds array bounds/);
+  checkThrows('assignment past dim 2 would be N-D', () => run('B(1, 1, 2) = 5'), /would create an N-D array/);
+
+  // permute / ipermute / squeeze on 2-D arrays.
+  run("P = permute([1 2 3; 4 5 6], [2 1]); Q = permute([1 2 3], [2 3 1]); R = ipermute([1 2 3], [3 1 2]); S = squeeze([1 2; 3 4]); Z = permute([1i 2], [2 1]); C = permute({1, 'a'}, [2 1]);");
+  check('permute(A, [2 1]) transposes', [sz('P'), v('P').re], [[3, 2], [1, 2, 3, 4, 5, 6]]);
+  check('permute moving a singleton', [sz('Q'), sz('R')], [[3, 1], [3, 1]]);
+  check('squeeze of a 2-D array', v('S').re, [1, 3, 2, 4]);
+  check('permute does not conjugate', v('Z').im, [1, 0]);
+  check('permute of a cell', [sz('C'), interp.workspace.get('C').data[1].toJSString()], [[2, 1], 'a']);
+  checkThrows('permute to N-D', () => run('permute([1 2; 3 4], [1 3 2])'), /N-D/);
+  checkThrows('permute order must be a permutation', () => run('permute([1 2], [1 1])'), /permutation/);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

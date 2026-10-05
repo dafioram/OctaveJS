@@ -1,9 +1,9 @@
 // arrayops.js — find/any/all, NaN/Inf predicates, fliplr/flipud/flip,
-// sort, unique, repmat, and the cat/horzcat/vertcat function forms of
+// sort, unique, repmat, permute/ipermute/squeeze, and the cat/horzcat/vertcat function forms of
 // matrix concatenation (which the interpreter already does for `[A B]`
 // and `[A;B]` — these just expose that as callable functions).
 
-import { Mat, Cell, MatlabError } from '../core/values.js';
+import { Mat, Cell, StructArray, MatlabError, shapeArgs, shape2D } from '../core/values.js';
 
 // Cell arrays of strings sort/unique by character codes (MATLAB's order).
 function cellstrValues(c, fname) {
@@ -23,25 +23,72 @@ function nonzeroPositions(mat) {
   return positions;
 }
 
-function anyAll(mat, mode) {
+// A dimension argument: a positive integer.
+function dimArg(v, fname) {
+  const d = v.toScalarNumber();
+  if (!Number.isInteger(d) || d < 1) throw new MatlabError(`${fname}: dimension argument must be a positive integer`);
+  return d;
+}
+
+// any(A) | any(A, dim) | any(A, 'all'), and the same for all. As in MATLAB
+// the default dimension is the first non-singleton one, and a dimension of
+// 3 or more (a singleton of a 2-D array) tests each element on its own.
+function anyAll(args, mode) {
   const allMode = mode === 'all';
-  if (mat.isEmpty) return Mat.logicalScalar(allMode); // MATLAB: all([])=true, any([])=false
-  const testCol = (colStart, count, stride) => {
-    let result = allMode;
-    for (let i = 0; i < count; i++) {
-      const k = colStart + i * stride;
-      const nz = mat.re[k] !== 0 || (mat.isComplex && mat.im[k] !== 0);
-      if (!allMode && nz) return true;
-      if (allMode && !nz) return false;
-    }
-    return result;
-  };
-  if (mat.rows === 1 || mat.cols === 1) {
-    return Mat.logicalScalar(testCol(0, mat.numel, 1));
+  let mat = args[0];
+  let dim = null;
+  if (args.length >= 2) {
+    if (args[1].isChar) {
+      if (args[1].toJSString().toLowerCase() !== 'all') throw new MatlabError(`${mode}: unrecognized option '${args[1].toJSString()}'`);
+      mat = new Mat(mat.numel, 1, mat.re, mat.im);
+      dim = 1;
+    } else dim = dimArg(args[1], mode);
   }
-  const re = new Float64Array(mat.cols);
-  for (let c = 0; c < mat.cols; c++) re[c] = testCol(c * mat.rows, mat.rows, 1) ? 1 : 0;
-  return tagLogical(new Mat(1, mat.cols, re));
+  if (dim === null) {
+    if (mat.rows === 0 && mat.cols === 0) return Mat.logicalScalar(allMode); // any([]) = false, all([]) = true
+    dim = mat.rows === 1 ? 2 : 1;
+  }
+  const nz = (k) => mat.re[k] !== 0 || (mat.isComplex && mat.im[k] !== 0);
+  if (dim >= 3) return tagLogical(new Mat(mat.rows, mat.cols, Float64Array.from({ length: mat.numel }, (_, k) => (nz(k) ? 1 : 0))));
+  const test = (start, count, stride) => {
+    for (let i = 0; i < count; i++) {
+      const hit = nz(start + i * stride);
+      if (!allMode && hit) return 1;
+      if (allMode && !hit) return 0;
+    }
+    return allMode ? 1 : 0;
+  };
+  if (dim === 1) return tagLogical(new Mat(1, mat.cols, Float64Array.from({ length: mat.cols }, (_, c) => test(c * mat.rows, mat.rows, 1))));
+  return tagLogical(new Mat(mat.rows, 1, Float64Array.from({ length: mat.rows }, (_, r) => test(r, mat.cols, mat.rows))));
+}
+
+// permute(A, order) for a 2-D A: dimensions 3 and up have size 1, so
+// the result is 2-D as long as only those move past the second place.
+function permuteArray(a, orderArg, fname, inverse) {
+  let order = Array.from(orderArg.re);
+  const n = order.length;
+  if (n < 2 || order.slice().sort((x, y) => x - y).some((d, k) => d !== k + 1)) {
+    throw new MatlabError(`${fname}: the order must be a permutation of 1:N with N >= 2`);
+  }
+  if (inverse) { const inv = new Array(n); order.forEach((d, k) => { inv[d - 1] = k + 1; }); order = inv; }
+  const inSize = order.map((_, k) => (k === 0 ? a.rows : k === 1 ? a.cols : 1));
+  const [rows, cols] = shape2D(order.map(d => inSize[d - 1]), fname);
+  // Element (i, j) of the result is the input element whose subscript
+  // along dimension order(1) is i and along order(2) is j.
+  const src = new Array(rows * cols);
+  for (let j = 0; j < cols; j++) {
+    for (let i = 0; i < rows; i++) {
+      const sub = [0, 0];
+      if (order[0] <= 2) sub[order[0] - 1] = i;
+      if (order[1] <= 2) sub[order[1] - 1] = j;
+      src[j * rows + i] = sub[1] * a.rows + sub[0];
+    }
+  }
+  if (a instanceof Cell) return new Cell(rows, cols, src.map(k => a.data[k]));
+  if (a instanceof StructArray) return new StructArray(rows, cols, a.fieldNames, src.map(k => new Map(a.data[k])), a.classOverride);
+  const re = Float64Array.from(src, k => a.re[k]);
+  const im = a.im ? Float64Array.from(src, k => a.im[k]) : null;
+  return new Mat(rows, cols, re, im, { isChar: a.isChar, isLogical: a.isLogical });
 }
 
 function flipDim(mat, dim) {
@@ -104,8 +151,8 @@ export function registerArrayOps(reg) {
     },
   });
 
-  reg.set('any', { fn: (args) => [anyAll(args[0], 'any')] });
-  reg.set('all', { fn: (args) => [anyAll(args[0], 'all')] });
+  reg.set('any', { fn: (args) => [anyAll(args, 'any')] });
+  reg.set('all', { fn: (args) => [anyAll(args, 'all')] });
 
   reg.set('isnan', { fn: (args) => [tagLogical(Mat.mapElementwise(args[0], (r, i) => [(Number.isNaN(r) || Number.isNaN(i)) ? 1 : 0, 0]))] });
   reg.set('isinf', { fn: (args) => [tagLogical(Mat.mapElementwise(args[0], (r, i) => [((!isFinite(r) && !Number.isNaN(r)) || (!isFinite(i) && !Number.isNaN(i))) ? 1 : 0, 0]))] });
@@ -116,8 +163,8 @@ export function registerArrayOps(reg) {
   reg.set('flip', {
     fn: (args) => {
       const a = args[0];
-      const dim = args.length >= 2 ? Math.round(args[1].toScalarNumber()) : (a.rows === 1 ? 2 : 1);
-      return [flipDim(a, dim)];
+      const dim = args.length >= 2 ? dimArg(args[1], 'flip') : (a.rows === 1 ? 2 : 1);
+      return [dim >= 3 ? a.clone() : flipDim(a, dim)]; // a 2-D array is a single page along dim 3+
     },
   });
 
@@ -136,7 +183,12 @@ export function registerArrayOps(reg) {
       for (let i = 1; i < args.length; i++) {
         const arg = args[i];
         if (arg.isChar) descending = arg.toJSString().toLowerCase() === 'descend';
-        else dim = Math.round(arg.toScalarNumber());
+        else dim = dimArg(arg, 'sort');
+      }
+      if (dim >= 3) {
+        // Sorting along a singleton dimension leaves A as it is.
+        const ones = Mat.zeros(a.rows, a.cols); ones.re.fill(1);
+        return nargout >= 2 ? [a.clone(), ones] : [a.clone()];
       }
       const sorted = Mat.zeros(a.rows, a.cols);
       if (a.isComplex) sorted.im = new Float64Array(a.numel);
@@ -227,10 +279,8 @@ export function registerArrayOps(reg) {
   reg.set('repmat', {
     fn: (args) => {
       const a = args[0];
-      let m, n;
-      if (args.length === 2 && args[1].numel === 2) { m = Math.round(args[1].re[0]); n = Math.round(args[1].re[1]); }
-      else if (args.length === 2) { m = n = Math.round(args[1].toScalarNumber()); }
-      else { m = Math.round(args[1].toScalarNumber()); n = Math.round(args[2].toScalarNumber()); }
+      if (args.length < 2) throw new MatlabError('repmat: expected repmat(A, n), repmat(A, m, n) or repmat(A, [m n])');
+      const [m, n] = shapeArgs(args.slice(1), 'repmat');
       const rows = a.rows * m, cols = a.cols * n;
       const re = new Float64Array(rows * cols);
       const im = a.isComplex ? new Float64Array(rows * cols) : null;
@@ -249,13 +299,33 @@ export function registerArrayOps(reg) {
     },
   });
 
+  reg.set('permute', {
+    fn: (args) => {
+      if (args.length < 2) throw new MatlabError('permute: expected permute(A, order)');
+      return [permuteArray(args[0], args[1], 'permute', false)];
+    },
+  });
+  reg.set('ipermute', {
+    fn: (args) => {
+      if (args.length < 2) throw new MatlabError('ipermute: expected ipermute(A, order)');
+      return [permuteArray(args[0], args[1], 'ipermute', true)];
+    },
+  });
+  // squeeze removes singleton dimensions; a 2-D array has none to remove.
+  reg.set('squeeze', { fn: (args) => [args[0]] });
+
   reg.set('horzcat', { fn: (args, _n, ctx) => [ctx.interp.hconcat(args)] });
   reg.set('vertcat', { fn: (args, _n, ctx) => [ctx.interp.vconcat(args)] });
   reg.set('cat', {
     fn: (args, _n, ctx) => {
-      const dim = Math.round(args[0].toScalarNumber());
+      const dim = dimArg(args[0], 'cat');
       const rest = args.slice(1);
-      return [dim === 1 ? ctx.interp.vconcat(rest) : ctx.interp.hconcat(rest)];
+      if (dim <= 2) return [dim === 1 ? ctx.interp.vconcat(rest) : ctx.interp.hconcat(rest)];
+      // Along dimension 3 or more, only one non-empty array can take part
+      // (more would make an N-D array).
+      const parts = rest.filter(v => !(v.rows === 0 && v.cols === 0));
+      if (parts.length > 1) throw new MatlabError(`cat: concatenating along dimension ${dim} would create an N-D array, which is not supported`);
+      return [parts.length ? parts[0] : (rest[0] || Mat.empty())];
     },
   });
 }

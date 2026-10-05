@@ -54,6 +54,7 @@ const BUILTIN_HINTS = new Set([
   'parula', 'turbo', 'jet', 'hsv', 'hot', 'cool', 'spring', 'summer', 'autumn', 'winter', 'gray',
   'bone', 'copper', 'pink', 'white', 'lines', 'colorbar', 'clim', 'caxis', 'view', 'zlabel', 'zlim',
   'shading', 'peaks', 'sphere', 'saveas', 'exportgraphics', 'print', 'drawnow', 'pause',
+  'permute', 'ipermute', 'squeeze',
 ]);
 
 function endsValue(prev) {
