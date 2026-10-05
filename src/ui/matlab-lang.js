@@ -50,6 +50,10 @@ const BUILTIN_HINTS = new Set([
   'gcf', 'gca', 'clf', 'close', 'subplot', 'sgtitle', 'ishold', 'semilogx', 'semilogy', 'loglog',
   'stairs', 'stem', 'errorbar', 'polarplot', 'barh', 'area', 'fill', 'pie', 'text', 'box',
   'xticks', 'yticks', 'xticklabels', 'yticklabels', 'set', 'get', 'isgraphics',
+  'plot3', 'scatter3', 'surf', 'mesh', 'contour', 'contourf', 'imagesc', 'image', 'colormap',
+  'parula', 'turbo', 'jet', 'hsv', 'hot', 'cool', 'spring', 'summer', 'autumn', 'winter', 'gray',
+  'bone', 'copper', 'pink', 'white', 'lines', 'colorbar', 'clim', 'caxis', 'view', 'zlabel', 'zlim',
+  'shading', 'peaks', 'sphere', 'saveas', 'exportgraphics', 'print', 'drawnow', 'pause',
 ]);
 
 function endsValue(prev) {

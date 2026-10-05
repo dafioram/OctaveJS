@@ -39,7 +39,8 @@ const ASSIGNABLE = new Set(['Ident', 'Index', 'Field', 'DynField', 'CellIndex'])
 // exactly the handful of commands where it's actually idiomatic and
 // where the ambiguity this shortcut sidesteps essentially never arises
 // in practice. See README.
-const COMMAND_SYNTAX_NAMES = new Set(['clear', 'hold', 'grid', 'axis', 'disp', 'format', 'box', 'legend', 'close', 'warning', 'xlim', 'ylim']);
+const COMMAND_SYNTAX_NAMES = new Set(['clear', 'hold', 'grid', 'axis', 'disp', 'format', 'box', 'legend', 'close', 'warning', 'xlim', 'ylim', 'zlim',
+  'colormap', 'colorbar', 'shading', 'drawnow', 'clim', 'caxis', 'pause']);
 
 class Parser {
   constructor(tokens, source = '') {

@@ -17,6 +17,8 @@
 
 import { Mat, Cell, StructArray, MatlabError } from '../core/values.js';
 import { COLOR_ORDER, LINE_STYLES, colorFromText, markerFromText, parseLinespec } from '../plot/style.js';
+import { colormapByName, colorDataRange, DEFAULT_COLORMAP_SIZE } from '../plot/colormaps.js';
+import { contourLevelValues } from '../plot/contours.js';
 
 const FIRST_OBJECT_HANDLE = 1001;
 
@@ -59,8 +61,24 @@ function nextHandle(interp) {
 }
 
 function newFigure(num, name = '') {
-  return { num, name, axes: [], current: null, sgtitle: null };
+  return { num, name, axes: [], current: null, sgtitle: null, colormap: null };
 }
+
+// A colormap from a name ('jet') or an N-by-3 matrix of RGB rows in [0, 1].
+function colormapValue(v) {
+  if (isText(v)) {
+    const map = colormapByName(v.toJSString().toLowerCase());
+    if (!map) throw new MatlabError(`Unknown colormap '${v.toJSString()}'`);
+    return map;
+  }
+  if (v instanceof Mat && v.cols === 3 && v.rows >= 1 && !v.isComplex) {
+    const rows = rowsOf(v);
+    if (rows.flat().some(x => !(x >= 0 && x <= 1))) throw new MatlabError('Colormap values must be between 0 and 1');
+    return rows;
+  }
+  throw new MatlabError('A colormap must be a name or an N-by-3 matrix of RGB values');
+}
+const defaultColormap = () => colormapByName('parula', DEFAULT_COLORMAP_SIZE);
 
 function axesDefaults() {
   return {
@@ -69,11 +87,14 @@ function axesDefaults() {
     xscale: 'linear', yscale: 'linear', grid: false, minorGrid: false, box: true, visible: true,
     equal: false, ydir: 'normal', xticks: null, yticks: null, xticklabels: null, yticklabels: null,
     legend: { show: false, location: 'northeast', boxOff: false },
+    // 3-D and color: z axis, camera angles (MATLAB's default view), and
+    // color limits (null = the range of the plotted color data).
+    zlabel: null, zlim: null, view: [-37.5, 30], clim: null,
   };
 }
 
 function newAxes(interp, cell = null) {
-  return { h: nextHandle(interp), cell, hold: false, ...axesDefaults() };
+  return { h: nextHandle(interp), cell, hold: false, colorbar: false, colormap: null, ...axesDefaults() };
 }
 
 // The current figure, created (as the lowest unused number) if none exists.
@@ -109,6 +130,7 @@ function touch(ctx, num = ctx.interp.figureState.current) {
 // reset its properties (MATLAB's NextPlot 'replace').
 function prepareAxes(ctx, kind) {
   const ax = currentAxes(ctx);
+  // The colorbar and an axes-specific colormap survive a replot.
   if (!ax.hold) Object.assign(ax, axesDefaults(), { kind });
   else if (ax.kind !== kind) {
     if (ax.objects.length === 0) ax.kind = kind;
@@ -144,7 +166,7 @@ function findHandle(interp, h) {
 function colorValue(v, name) {
   if (isText(v)) {
     const t = v.toJSString().trim().toLowerCase();
-    if (t === 'none' || t === 'auto' || t === 'flat') return t;
+    if (t === 'none' || t === 'auto' || t === 'flat' || t === 'interp') return t;
     const c = colorFromText(t);
     if (c) return c;
     throw new MatlabError(`Invalid color '${v.toJSString()}' for ${name}`);
@@ -194,6 +216,14 @@ const PROPS = {
   horizontalalignment: ['hAlign', (v, n) => textOf(v, n).toLowerCase()],
   verticalalignment: ['vAlign', (v, n) => textOf(v, n).toLowerCase()],
   capsize: ['capSize', scalarValue],
+  linecolor: ['lineColor', colorValue],
+  showtext: ['showText', (v, n) => {
+    const s = textOf(v, n).toLowerCase();
+    if (s !== 'on' && s !== 'off') throw new MatlabError(`${n} must be 'on' or 'off'`);
+    return s === 'on';
+  }],
+  levellist: ['levelList', (v) => values(v)],
+  resolution: ['resolution', scalarValue],
 };
 const LINE_PROPS = ['color', 'linewidth', 'linestyle', 'marker', 'markersize', 'markerfacecolor', 'markeredgecolor', 'displayname'];
 // Accepted for compatibility but with no visual effect here.
@@ -409,8 +439,9 @@ function onOff(args, current, fname) {
 // Data range of an axes along x or y (used when limits are 'auto').
 function dataRange(ax, dim) {
   let mn = Infinity, mx = -Infinity;
-  const scan = (arr) => { for (const v of arr) if (Number.isFinite(v)) { mn = Math.min(mn, v); mx = Math.max(mx, v); } };
+  const scan = (arr) => { for (const v of arr.flat()) if (Number.isFinite(v)) { mn = Math.min(mn, v); mx = Math.max(mx, v); } };
   for (const o of ax.objects) {
+    if (dim === 'z') { if (o.z) scan(o.z); continue; }
     if (o.type === 'histogram') { if (dim === 'x') scan(o.edges); else scan([0, ...o.values]); continue; }
     if (o.type === 'pie') continue;
     const horizontal = o.type === 'bar' && o.horizontal;
@@ -460,6 +491,7 @@ function propertyTable(found) {
     return {
       Name: [() => toMat(fig.name), (v) => { fig.name = textOf(v, 'Name'); }],
       Number: [() => Mat.scalar(fig.num), null],
+      Colormap: [() => Mat.fromRows(fig.colormap || defaultColormap()), (v) => { fig.colormap = colormapValue(v); }],
     };
   }
   if (kind === 'axes') {
@@ -474,7 +506,13 @@ function propertyTable(found) {
       ax[k] = s;
     }];
     return {
-      XLim: lim('xlim'), YLim: lim('ylim'), XScale: scale('xscale'), YScale: scale('yscale'),
+      XLim: lim('xlim'), YLim: lim('ylim'), ZLim: lim('zlim'), XScale: scale('xscale'), YScale: scale('yscale'),
+      CLim: [() => Mat.fromRows([ax.clim || colorDataRange(ax)]), (v) => {
+        const a = values(v);
+        if (a.length !== 2 || !(a[0] < a[1])) throw new MatlabError('CLim must be a 2-element vector of increasing values');
+        ax.clim = a;
+      }],
+      View: [() => Mat.fromRows([ax.view]), (v) => { const a = values(v); if (a.length !== 2) throw new MatlabError('View must be [azimuth elevation]'); ax.view = a; }],
       XGrid: [() => toMat(ax.grid ? 'on' : 'off'), (v) => { ax.grid = textOf(v, 'XGrid').toLowerCase() === 'on'; }],
       YGrid: [() => toMat(ax.grid ? 'on' : 'off'), (v) => { ax.grid = textOf(v, 'YGrid').toLowerCase() === 'on'; }],
       Box: [() => toMat(ax.box ? 'on' : 'off'), (v) => { ax.box = textOf(v, 'Box').toLowerCase() === 'on'; }],
@@ -492,8 +530,28 @@ function propertyTable(found) {
     DisplayName: [() => toMat(obj.displayName || ''), (v) => { obj.displayName = textOf(v, 'DisplayName'); }],
   };
   const data = (k) => [() => Mat.fromRows([obj[k]]), (v) => { obj[k] = values(v); }];
-  if (['line', 'stem', 'errorbar', 'scatter', 'bar', 'area', 'fill'].includes(obj.type)) { t.XData = data('x'); t.YData = data('y'); }
-  if (['line', 'stem', 'errorbar', 'scatter'].includes(obj.type)) {
+  const grid = (k) => [() => Mat.fromRows(obj[k]), (v) => { obj[k] = rowsOf(v); }];
+  if (['line', 'stem', 'errorbar', 'scatter', 'bar', 'area', 'fill', 'line3', 'scatter3'].includes(obj.type)) { t.XData = data('x'); t.YData = data('y'); }
+  if (['line3', 'scatter3'].includes(obj.type)) t.ZData = data('z');
+  if (obj.type === 'surface') {
+    Object.assign(t, {
+      XData: grid('x'), YData: grid('y'), ZData: grid('z'), CData: grid('c'),
+      FaceColor: [() => colorOut(obj.faceColor), (v) => { obj.faceColor = colorValue(v, 'FaceColor'); }],
+      EdgeColor: [() => colorOut(obj.edgeColor), (v) => { obj.edgeColor = colorValue(v, 'EdgeColor'); }],
+      FaceAlpha: [() => Mat.scalar(obj.faceAlpha), (v) => { obj.faceAlpha = scalarValue(v, 'FaceAlpha'); }],
+    });
+  }
+  if (obj.type === 'image') t.CData = grid('c');
+  if (obj.type === 'contour') {
+    Object.assign(t, {
+      ZData: grid('z'),
+      LevelList: [() => Mat.fromRows([contourLevelValues(obj.z, obj.levels)]), (v) => { obj.levels = values(v); }],
+      LineColor: [() => colorOut(obj.lineColor), (v) => { obj.lineColor = colorValue(v, 'LineColor'); }],
+      LineWidth: [() => Mat.scalar(obj.lineWidth), (v) => { obj.lineWidth = scalarValue(v, 'LineWidth'); }],
+      ShowText: [() => toMat(obj.showText ? 'on' : 'off'), (v) => { obj.showText = PROPS.showtext[1](v, 'ShowText'); }],
+    });
+  }
+  if (['line', 'stem', 'errorbar', 'scatter', 'line3'].includes(obj.type)) {
     const prop = (k, conv, out = toMat) => [() => out(obj[k]), (v) => { obj[k] = conv(v, k); }];
     Object.assign(t, {
       Color: prop('color', colorValue, colorOut),
@@ -547,6 +605,49 @@ function cellsOverlap(a, b) {
 }
 
 // ---------------- registration ----------------
+
+// Helpers shared with plotting3d.js.
+export const plotKit = {
+  isText, textOf, values, handlesMat, figureMap, currentFigure, currentAxes, prepareAxes,
+  nextHandle, touch, parseProps, colorValue, scalarValue, colormapValue, defaultColormap,
+  findHandle, requireHandles, onOff, columns, rowsOf, splitPlotArgs, makeLine, takeFlags,
+  LINE_PROPS, labelArgs, limitsArg, nextColor,
+};
+
+const IMAGE_FORMATS = { png: 'png', jpg: 'jpeg', jpeg: 'jpeg', svg: 'svg' };
+
+// Asks the host (the page) to render figure `num` to an image file in the
+// Files panel. The worker can't draw, so this is a request; the file
+// appears once the page has rendered it.
+function exportFigure(ctx, num, name, format, dpi, fname) {
+  const fig = figureMap(ctx.interp).get(num);
+  if (!fig) throw new MatlabError(`${fname}: figure ${num} does not exist`);
+  let fmt = format;
+  if (!fmt) {
+    const ext = (/\.([A-Za-z0-9]+)$/.exec(name) || [])[1];
+    if (!ext) throw new MatlabError(`${fname}: give the file an extension (.png, .jpg or .svg)`);
+    fmt = ext.toLowerCase();
+  }
+  const f = IMAGE_FORMATS[fmt.toLowerCase()];
+  if (!f) throw new MatlabError(`${fname}: unsupported format '${fmt}' (use png, jpg or svg)`);
+  if (!/\.[A-Za-z0-9]+$/.test(name)) name += f === 'jpeg' ? '.jpg' : `.${f}`;
+  if (!ctx.host.figures || !ctx.host.figures.export) throw new MatlabError(`${fname}: saving figures is only available in the browser app`);
+  ctx.host.figures.export(num, fig, { name, format: f, width: 800, height: 600, scale: (dpi || 96) / 96 });
+}
+
+// The figure a handle refers to (a figure number, or an axes/object handle).
+function figureOfHandle(ctx, h, fname) {
+  const found = findHandle(ctx.interp, h);
+  if (!found) throw new MatlabError(`${fname}: invalid graphics handle (${h})`);
+  return found.fig.num;
+}
+
+// Busy-waits `seconds`: pause runs in the worker (or, without one, on the
+// page), and plain synchronous code has no way to sleep there.
+function sleepSync(seconds) {
+  const end = Date.now() + seconds * 1000;
+  while (Date.now() < end) { /* waiting */ }
+}
 
 export function registerPlotting(reg) {
   // ---- figures ----
@@ -1008,21 +1109,23 @@ export function registerPlotting(reg) {
   reg.set('xlim', { fn: (args, _n, ctx) => limitsArg(args, currentAxes(ctx), 'xlim', 'xlim', ctx) });
   reg.set('ylim', { fn: (args, _n, ctx) => limitsArg(args, currentAxes(ctx), 'ylim', 'ylim', ctx) });
 
-  // axis([xmin xmax ymin ymax]) | axis equal|image|square|tight|auto|normal|off|on|ij|xy
+  // axis([xmin xmax ymin ymax (zmin zmax)]) | axis equal|image|square|tight|auto|normal|off|on|ij|xy
   reg.set('axis', {
     fn: (args, _n, ctx) => {
       const ax = currentAxes(ctx);
       if (args.length === 0) {
-        return [Mat.fromRows([[...(ax.xlim || dataRange(ax, 'x')), ...(ax.ylim || dataRange(ax, 'y'))]])];
+        const lims = [...(ax.xlim || dataRange(ax, 'x')), ...(ax.ylim || dataRange(ax, 'y'))];
+        if (ax.kind === '3d') lims.push(...(ax.zlim || dataRange(ax, 'z')));
+        return [Mat.fromRows([lims])];
       }
       for (const a of args) {
         if (isText(a)) {
           const mode = a.toJSString().toLowerCase();
           switch (mode) {
             case 'equal': ax.equal = true; break;
-            case 'image': ax.equal = true; ax.xlim = null; ax.ylim = null; break;
+            case 'image': ax.equal = true; ax.xlim = null; ax.ylim = null; ax.zlim = null; break;
             case 'square': break; // aspect ratio of the box itself isn't controllable here; accepted and ignored
-            case 'tight': case 'auto': ax.xlim = null; ax.ylim = null; break;
+            case 'tight': case 'auto': ax.xlim = null; ax.ylim = null; ax.zlim = null; break;
             case 'normal': ax.equal = false; ax.ydir = 'normal'; break;
             case 'off': ax.visible = false; break;
             case 'on': ax.visible = true; break;
@@ -1032,8 +1135,11 @@ export function registerPlotting(reg) {
           }
         } else {
           const v = values(a);
-          if (v.length < 4 || !(v[0] < v[1]) || !(v[2] < v[3])) throw new MatlabError('axis: limits must be [xmin xmax ymin ymax] with increasing pairs');
+          if ((v.length !== 4 && v.length !== 6) || !(v[0] < v[1]) || !(v[2] < v[3]) || (v.length === 6 && !(v[4] < v[5]))) {
+            throw new MatlabError('axis: limits must be [xmin xmax ymin ymax] or [xmin xmax ymin ymax zmin zmax] with increasing pairs');
+          }
           ax.xlim = [v[0], v[1]]; ax.ylim = [v[2], v[3]];
+          if (v.length === 6) ax.zlim = [v[4], v[5]];
         }
       }
       touch(ctx);
@@ -1072,6 +1178,86 @@ export function registerPlotting(reg) {
   });
   reg.set('xticklabels', tickLabelsFn('xticklabels'));
   reg.set('yticklabels', tickLabelsFn('yticklabels'));
+
+  // ---- saving figures ----
+  // saveas(h, filename) | saveas(h, filename, format)
+  reg.set('saveas', {
+    fn: (args, _n, ctx) => {
+      if (args.length < 2) throw new MatlabError('saveas: expected saveas(h, filename)');
+      const num = figureOfHandle(ctx, args[0].toScalarNumber(), 'saveas');
+      exportFigure(ctx, num, textOf(args[1], 'saveas: filename'), args[2] ? textOf(args[2], 'saveas: format') : null, null, 'saveas');
+      return [];
+    },
+  });
+  // exportgraphics(h, filename, 'Resolution', dpi)
+  reg.set('exportgraphics', {
+    fn: (args, _n, ctx) => {
+      if (args.length < 2) throw new MatlabError('exportgraphics: expected exportgraphics(h, filename)');
+      const num = figureOfHandle(ctx, args[0].toScalarNumber(), 'exportgraphics');
+      let dpi = null;
+      const rest = args.slice(2);
+      for (let i = 0; i + 1 < rest.length; i += 2) {
+        const key = textOf(rest[i], 'exportgraphics option').toLowerCase();
+        if (key === 'resolution') dpi = scalarValue(rest[i + 1], 'Resolution');
+        // ContentType, BackgroundColor, ... are accepted and ignored.
+      }
+      exportFigure(ctx, num, textOf(args[1], 'exportgraphics: filename'), null, dpi, 'exportgraphics');
+      return [];
+    },
+  });
+  // print(filename, '-dpng') | print(fig, filename, '-dsvg', '-r300') | print('-f2', ...)
+  reg.set('print', {
+    fn: (args, _n, ctx) => {
+      let num = null, name = null, format = null, dpi = null;
+      for (const a of args) {
+        if (!isText(a)) { num = figureOfHandle(ctx, a.toScalarNumber(), 'print'); continue; }
+        const t = a.toJSString();
+        if (/^-d/i.test(t)) format = t.slice(2).toLowerCase();
+        else if (/^-r\d+$/i.test(t)) dpi = Number(t.slice(2));
+        else if (/^-f\d+$/i.test(t)) num = Number(t.slice(2));
+        else if (t.startsWith('-')) { /* other print options are ignored */ }
+        else name = t;
+      }
+      if (!name) throw new MatlabError('print: give a file name (printing to a printer is not supported)');
+      if (num === null) num = currentFigure(ctx).num;
+      exportFigure(ctx, num, name, format, dpi, 'print');
+      return [];
+    },
+  });
+
+  // ---- animation ----
+  // drawnow: show the figures' current state now, mid-command.
+  reg.set('drawnow', {
+    fn: (_args, _n, ctx) => {
+      if (ctx.host.figures && ctx.host.figures.flush) ctx.host.figures.flush();
+      return [];
+    },
+  });
+  // pause(seconds) also updates figures first; pause('off') turns pauses off.
+  reg.set('pause', {
+    fn: (args, _n, ctx) => {
+      const interp = ctx.interp;
+      let t = args.length && !isText(args[0]) ? args[0].toScalarNumber() : null;
+      if (args.length && isText(args[0])) {
+        const s = args[0].toJSString().toLowerCase();
+        if (s.trim() !== '' && !Number.isNaN(Number(s))) t = Number(s); // command syntax: pause 2
+        else if (s === 'on' || s === 'off') { interp.pauseEnabled = s === 'on'; return []; }
+        else if (s === 'query') return [Mat.fromString(interp.pauseEnabled === false ? 'off' : 'on')];
+        else throw new MatlabError(`pause: unknown option '${s}'`);
+      }
+      // A pause long enough to look at always shows the latest frame; short
+      // ones in a tight loop are throttled like drawnow.
+      const shows = args.length > 0 && interp.pauseEnabled !== false && t >= 0.03;
+      if (ctx.host.figures && ctx.host.figures.flush) ctx.host.figures.flush(shows);
+      if (args.length === 0) {
+        if (!interp.warnedPauseKey) { interp.print('Warning: pause with no duration (wait for a key press) is not supported; continuing.\n'); interp.warnedPauseKey = true; }
+        return [];
+      }
+      if (!(t >= 0)) throw new MatlabError('pause: the duration must be a non-negative number');
+      if (interp.pauseEnabled !== false && Number.isFinite(t)) sleepSync(t);
+      return [];
+    },
+  });
 
   // ---- handles: get / set / isgraphics ----
   reg.set('set', {

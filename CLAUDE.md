@@ -12,7 +12,9 @@
 - `src/worker/` (the interpreter session behind the Web Worker) and
   `src/plot/` (figure model -> Plotly conversion) must also stay DOM-free;
   `test/run_tests5.mjs` drives the worker protocol and
-  `test/run_tests7.mjs` covers plotting (model and Plotly output).
+  `test/run_tests7.mjs` covers 2-D plotting (model and Plotly output) and
+  `test/run_tests8.mjs` 3-D plots, images, colormaps, saving figures and
+  drawnow/pause.
 - New MATLAB-compatibility fixes get a regression test in
   `test/run_tests4.mjs`; tests for language features go in
   `test/run_tests5.mjs` and for library functions in `test/run_tests6.mjs`

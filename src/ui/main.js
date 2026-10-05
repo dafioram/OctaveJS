@@ -130,6 +130,11 @@ function stopRunning() {
   backend.restart(initMessage());
   appendConsoleLine('Operation terminated by user. The workspace was restored to its state before the command.', 'error');
   setBusy(false);
+  // Figures go back to their pre-command state too (drawnow may have shown later frames).
+  pendingFrames.clear();
+  framesShown = false;
+  for (const num of [...figurePlotDivs.keys()]) if (!mirror.figures.has(num)) closeFigure(num, { notifySession: false });
+  for (const [num, fig] of mirror.figures) renderFigure(num, fig);
 }
 stopBtn.addEventListener('click', stopRunning);
 
@@ -155,8 +160,16 @@ function handleMessage(msg) {
       for (const { num, fig } of msg.figures) {
         if (fig) mirror.figures.set(num, fig); else mirror.figures.delete(num);
       }
+      pendingFrames.clear(); // the final state supersedes any undrawn frame
+      framesShown = false;
       showFigures(msg.figures);
       runNext();
+      return;
+    case 'figures':
+      showFrame(msg.figures);
+      return;
+    case 'exportFigure':
+      exportFigureToFile(msg.fig, msg.request);
       return;
     case 'workspace':
       applyDelta(msg.delta);
@@ -202,6 +215,63 @@ function showFigures(entries) {
 }
 
 const figureNames = new Map(); // figNum -> figure('Name', ...) title, if any
+
+// A mid-command update (drawnow / pause): draw the changed figures without
+// the end-of-command tab tour. Only the newest state of each figure is
+// kept and drawn once per animation frame, so a fast loop can't queue up
+// more renders than Plotly can keep up with.
+const pendingFrames = new Map();
+let frameScheduled = false;
+let framesShown = false; // only a command's first frame switches to the Figures tab, so Stop stays reachable
+
+function showFrame(entries) {
+  for (const { num, fig } of entries) { pendingFrames.delete(num); pendingFrames.set(num, fig); }
+  if (frameScheduled) return;
+  frameScheduled = true;
+  requestAnimationFrame(drawPendingFrames);
+}
+
+function drawPendingFrames() {
+  frameScheduled = false;
+  const entries = [...pendingFrames].map(([num, fig]) => ({ num, fig }));
+  pendingFrames.clear();
+  let last = null;
+  for (const { num, fig } of entries) {
+    if (!fig) { if (figurePlotDivs.has(num)) closeFigure(num, { notifySession: false }); continue; }
+    renderFigure(num, fig);
+    last = num;
+  }
+  if (last === null || framesShown) return;
+  framesShown = true;
+  switchTab('figures');
+  if (activeFigureNum !== last) switchFigureTab(last);
+}
+
+function dataUrlToBytes(url) {
+  const comma = url.indexOf(',');
+  const meta = url.slice(0, comma), body = url.slice(comma + 1);
+  if (meta.endsWith(';base64')) {
+    const bin = atob(body);
+    return Uint8Array.from(bin, c => c.charCodeAt(0));
+  }
+  return new TextEncoder().encode(decodeURIComponent(body));
+}
+
+// saveas / exportgraphics / print: render the figure off-screen with
+// Plotly and save the image into Files (white background, like MATLAB).
+async function exportFigureToFile(fig, request) {
+  try {
+    const { data, layout } = figureToPlotly(fig);
+    const fullLayout = Object.assign({
+      paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff',
+      font: { family: 'Helvetica, Arial, sans-serif', size: 12, color: '#262626' },
+    }, layout, { width: request.width, height: request.height });
+    const url = await Plotly.toImage({ data, layout: fullLayout }, { format: request.format, width: request.width, height: request.height, scale: request.scale });
+    saveFile(request.name, { kind: 'binary', bytes: dataUrlToBytes(url) });
+  } catch (e) {
+    appendConsoleLine(`Could not save ${request.name}: ${e && e.message ? e.message : e}`, 'error');
+  }
+}
 
 function renderFigure(figNum, fig) {
   const { data, layout } = figureToPlotly(fig);
@@ -828,9 +898,11 @@ function showHelpModal() {
     <p><strong>Strings:</strong> strcmp/strcmpi, upper/lower, strtrim, strrep, strsplit, strjoin, strcat, strfind, contains/startsWith/endsWith, regexp/regexpi/regexprep, str2double, str2num, sprintf, num2str, int2str.</p>
     <p><strong>Timing &amp; display:</strong> tic/toc, <code>format long</code> / <code>format short</code>.</p>
     <p><strong>Plotting:</strong> plot (line specs and Name,Value options), semilogx/semilogy/loglog, stairs, stem, errorbar, scatter, bar/barh, histogram, hist, area, fill, pie, polarplot, text; figure, subplot, sgtitle, hold, gcf/gca, clf, close; title/xlabel/ylabel, legend, grid, box, xlim/ylim, axis, xticks/xticklabels; set/get on handles.</p>
+    <p><strong>3-D, images &amp; color:</strong> plot3, scatter3, surf, mesh, contour/contourf, imagesc, image, peaks, sphere; view, zlabel, zlim, shading; colormap (parula, jet, hot, gray, turbo, … or an N-by-3 matrix), colorbar, clim/caxis.</p>
+    <p><strong>Saving &amp; animation:</strong> <code>saveas(gcf, 'plot.png')</code>, exportgraphics and print write PNG, JPEG or SVG files to the <em>Files</em> tab. <code>drawnow</code> and <code>pause(t)</code> show figures while a loop runs; Stop still interrupts.</p>
     <p><strong>Files:</strong> scripts and data live in the <em>Files</em> sidebar tab and are saved in this browser. Drag files onto the page to add them. <code>save</code>/<code>writematrix</code> write there too; use the &#x2913; button to download a file.</p>
     <p><strong>Console:</strong> commands run in the background — press <em>Stop</em> (or Ctrl+C in the command line) to interrupt one; the workspace returns to its state before that command. <code>clc</code> clears the window, <code>help('name')</code> shows syntax.</p>
-    <p><strong>Not supported:</strong> string arrays (double-quoted), N-D arrays, integer classes, classdef. Command syntax (bareword args) works for <code>clear</code>, <code>hold</code>, <code>grid</code>, <code>axis</code>, <code>disp</code>, <code>format</code>, <code>box</code>, <code>legend</code>, <code>close</code>, <code>warning</code>, <code>xlim</code>, <code>ylim</code> only. Full list in the README.</p>
+    <p><strong>Not supported:</strong> string arrays (double-quoted), N-D arrays, integer classes, classdef. Command syntax (bareword args) works for <code>clear</code>, <code>hold</code>, <code>grid</code>, <code>axis</code>, <code>disp</code>, <code>format</code>, <code>box</code>, <code>legend</code>, <code>close</code>, <code>warning</code>, <code>xlim</code>, <code>ylim</code>, <code>zlim</code>, <code>colormap</code>, <code>colorbar</code>, <code>shading</code>, <code>clim</code>, <code>caxis</code>, <code>drawnow</code>, <code>pause</code> only. Full list in the README.</p>
   `;
   openModal();
 }
