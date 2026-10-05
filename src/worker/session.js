@@ -16,6 +16,8 @@
 //   { type: 'print', text } / { type: 'clc' }
 //   { type: 'fileWritten', name, entry }                 save/writematrix output
 //   { type: 'done', id, error, workspace, delta, figures }
+//   { type: 'figures', figures }                         mid-command update (drawnow, pause)
+//   { type: 'exportFigure', num, fig, request }          saveas/exportgraphics/print: render to a file
 //   { type: 'workspace', workspace, delta }
 //   { type: 'var', id, name, value }
 //
@@ -32,15 +34,38 @@ const VIEWER_MAX_ELEMENTS = 2000;
 
 export function createSession(post, { snapshots = true } = {}) {
   let interp = null;
-  let touched = []; // figure numbers touched by the current command, first-touch order
+  let touched = [];      // figure numbers touched by the current command, first-touch order
+  let frameTouched = []; // ... and since the last mid-command update
+  let lastFlush = 0;
+  const FLUSH_INTERVAL_MS = 30; // at most ~30 drawnow updates per second reach the page
 
-  function touch(num) { if (!touched.includes(num)) touched.push(num); }
+  function touch(num) {
+    if (!touched.includes(num)) touched.push(num);
+    if (!frameTouched.includes(num)) frameTouched.push(num);
+  }
+  const figureEntry = (num) => ({ num, fig: interp.figures && interp.figures.has(num) ? interp.figures.get(num) : null });
+
+  // drawnow / pause: send the figures changed since the last update, now.
+  // Throttled unless forced (pause forces it when it then waits a while).
+  function flush(force = false) {
+    const now = Date.now();
+    if (frameTouched.length === 0 || (!force && now - lastFlush < FLUSH_INTERVAL_MS)) return;
+    lastFlush = now;
+    post({ type: 'figures', figures: frameTouched.map(figureEntry) });
+    frameTouched = [];
+  }
+
+  // saveas/exportgraphics/print: the page renders the figure to an image
+  // (a snapshot, since the figure may keep changing) and saves the file.
+  function exportFigure(num, fig, request) {
+    post({ type: 'exportFigure', num, fig: structuredClone(fig), request });
+  }
 
   function newInterpreter() {
     const it = new Interpreter({
       print: (text) => post({ type: 'print', text }),
       clearConsole: () => post({ type: 'clc' }),
-      figures: { render: touch, show: touch },
+      figures: { render: touch, show: touch, flush, export: exportFigure },
       io: { fileWritten: (name, entry) => post({ type: 'fileWritten', name, entry }) },
     });
     it.registerBuiltins(buildBuiltinsRegistry());
@@ -86,8 +111,9 @@ export function createSession(post, { snapshots = true } = {}) {
   }
 
   function figuresPayload() {
-    const out = touched.map(num => ({ num, fig: interp.figures && interp.figures.has(num) ? interp.figures.get(num) : null }));
+    const out = touched.map(figureEntry);
     touched = [];
+    frameTouched = [];
     return out;
   }
 

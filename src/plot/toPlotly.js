@@ -7,7 +7,9 @@
 // color order. Titles, labels, legend entries and text use MATLAB's TeX
 // subset (x^2, x_{i}, \alpha, \pm, ...), converted to Plotly's HTML.
 
-import { rgbCss, PARULA } from './style.js';
+import { rgbCss } from './style.js';
+import { colormapByName, plotlyColorscale, colorDataRange } from './colormaps.js';
+import { contourLevelValues } from './contours.js';
 
 const DASH = { '-': 'solid', '--': 'dash', ':': 'dot', '-.': 'dashdot' };
 const SYMBOL = {
@@ -66,9 +68,89 @@ function lineTrace(o, color = o.color) {
   return t;
 }
 
-// The traces for one plotted object (several for stems).
-function objectTraces(o) {
+// Marker settings shared by scatter and scatter3. Per-point color values
+// use the axes' color axis (colormap + color limits).
+function scatterMarker(o, colors) {
+  const sizeOf = (s) => Math.sqrt(Math.max(s, 0)) * 4 / 3;
+  const marker = {
+    symbol: SYMBOL[o.marker] + (o.filled || o.markerFaceColor !== 'none' ? '' : '-open'),
+    size: Array.isArray(o.sizes) ? o.sizes.map(sizeOf) : sizeOf(o.sizes),
+    line: { width: lineWidthPx(o.lineWidth) / 1.5 },
+  };
+  if (o.colorValues) {
+    marker.color = clean(o.colorValues);
+    marker.coloraxis = colors.id;
+  } else {
+    const face = Array.isArray(o.markerFaceColor) ? o.markerFaceColor : o.color;
+    const edge = Array.isArray(o.markerEdgeColor) ? o.markerEdgeColor : o.color;
+    marker.color = colorCss(o.filled || o.markerFaceColor !== 'none' ? face : edge);
+    marker.line.color = colorCss(edge);
+  }
+  return marker;
+}
+
+// Grid lines of a surface (MATLAB's edges) as one 3-D line trace with
+// breaks between rows and columns; 'flat' edges are colored by the data.
+function surfaceWire(o, colors) {
+  const xs = [], ys = [], zs = [], cs = [];
+  const push = (i, j) => { xs.push(o.x[i][j]); ys.push(o.y[i][j]); zs.push(o.z[i][j]); cs.push(o.c[i][j]); };
+  const gap = () => { xs.push(null); ys.push(null); zs.push(null); cs.push(null); };
+  const m = o.z.length, n = o.z[0].length;
+  for (let i = 0; i < m; i++) { for (let j = 0; j < n; j++) push(i, j); gap(); }
+  for (let j = 0; j < n; j++) { for (let i = 0; i < m; i++) push(i, j); gap(); }
+  const line = { width: Math.max(1, pt(o.lineWidth) * 1.5) };
+  if (Array.isArray(o.edgeColor)) line.color = rgbCss(o.edgeColor);
+  else Object.assign(line, { color: cs.map(v => (Number.isFinite(v) ? v : null)), colorscale: colors.scale, cmin: colors.cmin, cmax: colors.cmax });
+  return { type: 'scatter3d', mode: 'lines', x: clean(xs), y: clean(ys), z: clean(zs), line, hoverinfo: 'skip', showlegend: false };
+}
+
+// Contour levels as Plotly's start/end/size (see contours.js). Plotly
+// needs even spacing, so an uneven level vector is approximated by its
+// smallest step.
+function contourLevels(o) {
+  const lv = contourLevelValues(o.z, o.levels);
+  if (lv.length === 0) return { autocontour: true, ncontours: 10 };
+  const steps = lv.slice(1).map((v, k) => v - lv[k]).filter(d => d > 0);
+  return { autocontour: false, contours: { start: lv[0], end: lv[lv.length - 1], size: steps.length ? Math.min(...steps) : 1 } };
+}
+
+// The traces for one plotted object (several for stems and surfaces).
+function objectTraces(o, colors) {
   switch (o.type) {
+    case 'line3': {
+      const t = lineTrace(o);
+      return [{ ...t, type: 'scatter3d', z: clean(o.z) }];
+    }
+    case 'scatter3':
+      return [{ type: 'scatter3d', mode: 'markers', x: clean(o.x), y: clean(o.y), z: clean(o.z), marker: scatterMarker(o, colors) }];
+    case 'surface': {
+      const traces = [];
+      if (o.faceColor !== 'none') {
+        const t = {
+          type: 'surface', x: o.x.map(clean), y: o.y.map(clean), z: o.z.map(clean), opacity: o.faceAlpha, showscale: false,
+          // MATLAB surfaces are unlit by default: flat colors, no shading.
+          lighting: { ambient: 1, diffuse: 0, specular: 0, roughness: 1, fresnel: 0 }, hoverinfo: 'x+y+z',
+        };
+        if (Array.isArray(o.faceColor)) t.colorscale = [[0, rgbCss(o.faceColor)], [1, rgbCss(o.faceColor)]];
+        else { t.surfacecolor = o.c.map(clean); t.coloraxis = colors.id; }
+        traces.push(t);
+      }
+      if (o.edgeColor !== 'none') traces.push(surfaceWire(o, colors));
+      return traces;
+    }
+    case 'contour': {
+      const lines = o.lineColor === 'flat' && !o.filled;
+      const t = {
+        type: 'contour', x: clean(o.x), y: clean(o.y), z: o.z.map(clean), coloraxis: colors.id,
+        ...contourLevels(o),
+        line: { width: lineWidthPx(o.lineWidth) },
+      };
+      t.contours = { ...(t.contours || {}), coloring: o.filled ? 'fill' : lines ? 'lines' : 'none', showlabels: o.showText };
+      if (!lines && Array.isArray(o.lineColor)) t.line.color = rgbCss(o.lineColor);
+      return [t];
+    }
+    case 'image':
+      return [{ type: 'heatmap', x: clean(o.x), y: clean(o.y), z: o.c.map(clean), coloraxis: colors.id, hoverongaps: false }];
     case 'line': return [lineTrace(o)];
     case 'errorbar': {
       const t = lineTrace(o);
@@ -86,24 +168,8 @@ function objectTraces(o) {
       const heads = lineTrace({ ...o, lineStyle: 'none' });
       return [stems, heads];
     }
-    case 'scatter': {
-      const sizeOf = (s) => Math.sqrt(Math.max(s, 0)) * 4 / 3;
-      const color = o.colorValues ? null : o.color;
-      const marker = {
-        symbol: SYMBOL[o.marker] + (o.filled || o.markerFaceColor !== 'none' ? '' : '-open'),
-        size: Array.isArray(o.sizes) ? o.sizes.map(sizeOf) : sizeOf(o.sizes),
-        line: { width: lineWidthPx(o.lineWidth) / 1.5 },
-      };
-      if (o.colorValues) {
-        marker.color = clean(o.colorValues);
-        marker.colorscale = PARULA.map((c, k) => [k / (PARULA.length - 1), rgbCss(c)]);
-      } else {
-        const face = Array.isArray(o.markerFaceColor) ? o.markerFaceColor : color;
-        marker.color = colorCss(o.filled || o.markerFaceColor !== 'none' ? face : (Array.isArray(o.markerEdgeColor) ? o.markerEdgeColor : color));
-        marker.line.color = colorCss(Array.isArray(o.markerEdgeColor) ? o.markerEdgeColor : color);
-      }
-      return [{ type: 'scatter', mode: 'markers', x: clean(o.x), y: clean(o.y), marker }];
-    }
+    case 'scatter':
+      return [{ type: 'scatter', mode: 'markers', x: clean(o.x), y: clean(o.y), marker: scatterMarker(o, colors) }];
     case 'bar': {
       const t = { type: 'bar', marker: { color: colorCss(o.faceColor), line: { color: colorCss(o.edgeColor), width: 1 } } };
       if (o.horizontal) Object.assign(t, { orientation: 'h', x: clean(o.y), y: clean(o.x) });
@@ -185,6 +251,71 @@ function axisLayout(ax, dim, suffix, dom) {
   return a;
 }
 
+function sceneAxis(ax, dim) {
+  const lim = ax[`${dim}lim`], label = ax[`${dim}label`];
+  const scale = dim === 'z' ? 'linear' : ax[`${dim}scale`];
+  const a = {
+    type: scale === 'log' ? 'log' : 'linear', visible: ax.visible, showgrid: ax.grid, gridcolor: '#d9d9d9',
+    zeroline: false, showbackground: false, showline: true, linecolor: INK, ticks: 'outside', tickcolor: INK, showspikes: false,
+  };
+  if (lim) { a.range = scale === 'log' ? lim.map(v => Math.log10(v)) : lim.slice(); a.autorange = false; }
+  if (label) a.title = { text: texToHtml(label.text) };
+  const ticks = ax[`${dim}ticks`];
+  if (ticks) { a.tickmode = 'array'; a.tickvals = ticks; }
+  return a;
+}
+
+// Extent of an axes' data along one dimension (its limits if set).
+function extent3(ax, dim) {
+  if (ax[`${dim}lim`]) return ax[`${dim}lim`][1] - ax[`${dim}lim`][0];
+  let mn = Infinity, mx = -Infinity;
+  for (const o of ax.objects) {
+    if (!o[dim]) continue;
+    for (const v of o[dim].flat()) if (Number.isFinite(v)) { mn = Math.min(mn, v); mx = Math.max(mx, v); }
+  }
+  return mx > mn ? mx - mn : 1;
+}
+
+// A Plotly 3-D scene for an axes. The camera follows MATLAB's view(az, el):
+// azimuth measured from the -y axis, counterclockwise seen from above;
+// orthographic projection, as in MATLAB.
+export function sceneLayout(ax, dom) {
+  const [azDeg, elDeg] = ax.view;
+  const az = azDeg * Math.PI / 180, el = elDeg * Math.PI / 180;
+  const r = 1.9;
+  const top = Math.abs(elDeg) >= 89.9;
+  const eye = top
+    ? { x: 0, y: 0, z: r * Math.sign(elDeg) }
+    : { x: r * Math.sin(az) * Math.cos(el), y: -r * Math.cos(az) * Math.cos(el), z: r * Math.sin(el) };
+  const up = top ? { x: -Math.sin(az), y: Math.cos(az), z: 0 } : { x: 0, y: 0, z: 1 };
+  // The box: a cube, or proportional to the data with axis equal. With an
+  // orthographic camera Plotly's zoom comes from the box size, so scale it
+  // by how big the box looks from this direction: the plot then fills the
+  // axes from any view, as in MATLAB (1 for the default view).
+  let box = { x: 1, y: 1, z: 1 };
+  if (ax.equal) {
+    const e = { x: extent3(ax, 'x'), y: extent3(ax, 'y'), z: extent3(ax, 'z') };
+    const m = Math.max(e.x, e.y, e.z);
+    box = { x: e.x / m, y: e.y / m, z: e.z / m };
+  }
+  const wide = Math.abs(Math.cos(az)) * box.x + Math.abs(Math.sin(az)) * box.y;
+  const deep = Math.abs(Math.sin(az)) * box.x + Math.abs(Math.cos(az)) * box.y;
+  const tall = Math.abs(Math.sin(el)) * deep + Math.abs(Math.cos(el)) * box.z;
+  // Plotly fits the box to the scene's height, so a narrow scene (a tall
+  // subplot, or one beside a colorbar) also limits it by width; the figure
+  // is assumed to be about 1.4 times wider than tall.
+  const sceneAspect = ((dom.x[1] - dom.x[0]) / (dom.y[1] - dom.y[0])) * 1.4;
+  const zoom = Math.min(1.567 / Math.max(tall, 0.2), 1.9 * sceneAspect / Math.max(wide, 0.2), 3);
+  const zaxis = sceneAxis(ax, 'z');
+  if (top) zaxis.visible = false; // seen end-on, as in MATLAB's view(2)
+  return {
+    domain: { x: dom.x, y: dom.y },
+    xaxis: sceneAxis(ax, 'x'), yaxis: sceneAxis(ax, 'y'), zaxis,
+    camera: { eye, up, projection: { type: 'orthographic' } },
+    aspectmode: 'manual', aspectratio: { x: box.x * zoom, y: box.y * zoom, z: box.z * zoom },
+  };
+}
+
 function titleAnnotation(title, dom) {
   let text = `<b>${texToHtml(title.text)}</b>`;
   if (title.subtitle) text += `<br><span style="font-size:0.85em">${texToHtml(title.subtitle)}</span>`;
@@ -198,14 +329,39 @@ function titleAnnotation(title, dom) {
 export function figureToPlotly(fig) {
   const data = [];
   const layout = { annotations: [], showlegend: false, barmode: 'group', bargap: 0.2, hovermode: 'closest' };
-  let cartesian = 0, polar = 0, legends = 0;
+  let cartesian = 0, polar = 0, legends = 0, scenes = 0, colorAxes = 0;
   let objectCount = 0;
   let topTitle = false;
   for (const ax of fig.axes) {
-    const dom = axesDomain(ax.cell);
+    let dom = axesDomain(ax.cell);
+    // As in MATLAB, a colorbar takes its room from the axes beside it.
+    if (ax.colorbar) dom = { x: [dom.x[0], dom.x[1] - Math.min(0.09, (dom.x[1] - dom.x[0]) * 0.25)], y: dom.y };
     if (ax.title && dom.y[1] > 0.99) topTitle = true;
     const legendId = ax.legend.show ? (++legends === 1 ? 'legend' : `legend${legends}`) : null;
     if (legendId) { layout[legendId] = legendLayout(ax.legend.location, dom, ax.legend.boxOff); layout.showlegend = true; }
+    // Color data (surfaces, images, contours, per-point scatter colors)
+    // shares one Plotly color axis per MATLAB axes: its colormap, its
+    // color limits (CLim) and, when shown, its colorbar.
+    let colors = {};
+    if (ax.colorbar || ax.objects.some(o => ['surface', 'contour', 'image'].includes(o.type) || o.colorValues)) {
+      colorAxes++;
+      const id = colorAxes === 1 ? 'coloraxis' : `coloraxis${colorAxes}`;
+      const map = ax.colormap || fig.colormap || colormapByName('parula');
+      const unscaledImage = ax.objects.some(o => o.type === 'image' && !o.scaled);
+      const [cmin, cmax] = ax.clim || (unscaledImage ? [1, map.length] : colorDataRange(ax));
+      const scale = plotlyColorscale(map, rgbCss);
+      layout[id] = {
+        colorscale: scale, cmin, cmax, showscale: !!ax.colorbar,
+        colorbar: {
+          x: dom.x[1] + 0.015, xanchor: 'left', y: (dom.y[0] + dom.y[1]) / 2, yanchor: 'middle',
+          len: (dom.y[1] - dom.y[0]) * 0.9, thickness: 14, outlinewidth: 1, outlinecolor: INK, ticks: 'inside',
+        },
+      };
+      colors = { id, scale, cmin, cmax };
+    }
+    // Which trace of a multi-trace object carries its legend entry: the
+    // surface itself (not its grid lines), or a stem's markers.
+    const legendTrace = (o, traces) => (o.type === 'surface' ? 0 : traces.length - 1);
     const withLegend = (t, o) => {
       objectCount++;
       t.name = texToHtml(o.displayName ?? `data${objectCount}`);
@@ -228,10 +384,22 @@ export function figureToPlotly(fig) {
       const sub = polar === 1 ? 'polar' : `polar${polar}`;
       layout[sub] = { domain: { x: dom.x, y: dom.y }, angularaxis: { direction: 'counterclockwise', rotation: 0, gridcolor: '#e0e0e0' }, radialaxis: { gridcolor: '#e0e0e0' } };
       for (const o of ax.objects) {
-        for (const t of objectTraces(o)) {
+        for (const t of objectTraces(o, colors)) {
           const { x, y, ...rest } = t;
           data.push(withLegend({ ...rest, type: 'scatterpolar', r: y, theta: x, thetaunit: 'radians', subplot: sub }, o));
         }
+      }
+    } else if (ax.kind === '3d') {
+      scenes++;
+      const sub = scenes === 1 ? 'scene' : `scene${scenes}`;
+      layout[sub] = sceneLayout(ax, dom);
+      for (const o of ax.objects) {
+        const traces = objectTraces(o, colors);
+        traces.forEach((t, k) => {
+          t.scene = sub;
+          if (k !== legendTrace(o, traces)) { t.showlegend = false; data.push(t); }
+          else data.push(withLegend(t, o));
+        });
       }
     } else {
       cartesian++;
@@ -243,11 +411,10 @@ export function figureToPlotly(fig) {
           if (o.layout === 'stacked') layout.barmode = 'stack';
           layout.bargap = Math.min(Math.max(1 - o.barWidth, 0), 0.95);
         }
-        const traces = objectTraces(o);
+        const traces = objectTraces(o, colors);
         traces.forEach((t, k) => {
           t.xaxis = `x${suffix}`; t.yaxis = `y${suffix}`;
-          // Only the last trace of a multi-trace object (the stem heads) gets a legend entry.
-          if (k < traces.length - 1) { t.showlegend = false; data.push(t); }
+          if (k !== legendTrace(o, traces)) { t.showlegend = false; data.push(t); }
           else data.push(withLegend(t, o));
         });
       }

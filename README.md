@@ -153,6 +153,30 @@ the common line properties (including `XData`/`YData`), axes `XLim`/
 `isgraphics` checks a handle. Each figure's tab in the Figures panel has
 a &times; to close it.
 
+**3-D plots, images and color:** `plot3`, `scatter3`, `surf` and `mesh`
+(with `X`/`Y` as vectors or `meshgrid` matrices, an optional color matrix
+`C`, `FaceColor`/`EdgeColor`/`FaceAlpha`/`LineStyle`), `contour`/
+`contourf` (a level count or vector, `LevelList`, `LineColor`,
+`ShowText`), `imagesc` (optional color limits) and `image`, plus the
+sample data `peaks` and `sphere`. `view(az, el)`/`view(2)`/`view(3)` with
+MATLAB's orthographic camera, `zlabel`, `zlim`, `axis` with six limits,
+`shading flat|interp|faceted`. Colormaps: `colormap` takes a name or an
+N-by-3 matrix, per figure or per axes (`colormap(gca, hot)`); the
+functions `parula` (the default), `turbo`, `jet`, `hsv`, `hot`, `cool`,
+`spring`, `summer`, `autumn`, `winter`, `gray`, `bone`, `copper`, `pink`,
+`white` and `lines` return the maps as matrices. `colorbar` and
+`clim`/`caxis` work per axes, and 2-D and 3-D axes mix freely in
+subplots. `set`/`get` also cover `ZData`, `CData`, `CLim`, `View`,
+`ZLim`, contour `LevelList`, and the figure `Colormap`.
+
+**Saving figures and animation:** `saveas(gcf, 'plot.png')`,
+`exportgraphics(gca, 'plot.png', 'Resolution', 300)` and
+`print('plot', '-dsvg')` save PNG, JPEG or SVG files into the **Files**
+panel (download them from there). `drawnow` shows the figures while a
+loop keeps running (up to about 30 updates a second), and `pause(t)`
+shows them and then waits; Stop still interrupts the loop. `pause off`
+turns pauses into no-ops.
+
 **I/O:** `readmatrix`/`writematrix` (CSV), `save`/`load` (a real MAT5
 `.mat` writer/reader — see below), `run('script.m')`, and calling a script
 by its bare name. All of these work on the files in the **Files** panel.
@@ -171,11 +195,12 @@ there's a reasonable workaround, it's listed.
 | Not supported | Use instead |
 |---|---|
 | Double-quoted strings (`"hello"`, MATLAB string arrays) | Single-quoted char arrays: `'hello'` |
-| **General command syntax** for arbitrary/user-defined functions, e.g. calling your own `function foo(s)` as `foo bar` | Use the normal parenthesized form: `foo('bar')`. A small, fixed whitelist — `clear`, `hold`, `grid`, `axis`, `disp`, `format`, `box`, `legend`, `close`, `warning`, `xlim`, `ylim` — *does* support command syntax (`clear x y`, `hold on`, `grid off`, `axis equal`, `disp hello`, `format long`, `close all`, `legend off`), since those are idiomatic and unambiguous enough to special-case safely; see the note below the table. |
+| **General command syntax** for arbitrary/user-defined functions, e.g. calling your own `function foo(s)` as `foo bar` | Use the normal parenthesized form: `foo('bar')`. A small, fixed whitelist — `clear`, `hold`, `grid`, `axis`, `disp`, `format`, `box`, `legend`, `close`, `warning`, `xlim`, `ylim`, `zlim`, `colormap`, `colorbar`, `shading`, `clim`, `caxis`, `drawnow`, `pause` — *does* support command syntax (`clear x y`, `hold on`, `grid off`, `axis equal`, `disp hello`, `format long`, `close all`, `legend off`, `colormap hot`, `shading interp`), since those are idiomatic and unambiguous enough to special-case safely; see the note below the table. |
 | N-D arrays (more than 2 subscripts) | Reshape/index a 2-D matrix, or use multiple 2-D matrices |
 | Integer classes (`int8`, `uint16`, ...) — everything is `double` (or tagged `logical`/`char`) | Just use `double`; a trailing class-name argument to `zeros`/`ones` (e.g. `zeros(3,'int8')`) is silently ignored |
 | `()` followed by more indexing in an assignment, e.g. `x(2)(3) = 1` (MATLAB rejects this too; `s(2).f = 1` and `c{2}(3) = 1` *are* supported) | Use an intermediate variable |
-| 3-D plots (`plot3`, `surf`, `mesh`, `contour`), images (`imagesc`), `colormap`/`colorbar`, saving figures, `drawnow` animation | Coming in the next plotting update; use 2-D plots for now |
+| Other 3-D plot types (`quiver3`, `patch`, `fill3`, `waterfall`, ...), lighting (`light`, `lighting`, `material`) and `rotate3d` | `surf`/`mesh`/`plot3`/`scatter3`; drag the plot to rotate it in the Figures panel |
+| Saving figures as PDF or EPS, or printing to a printer | Save as SVG (vector) or PNG |
 | Full handle graphics (every property, `delete`, `findobj`, `uicontrol`, ...) | The `set`/`get` properties listed above; `axis square` is accepted but has no effect |
 | Complex-matrix `rank`/`svd` | `rank(real(A))` as an approximation, or avoid complex inputs |
 | Saving cell arrays or structs to `.mat` | They're skipped with a note; save their numeric contents as separate variables |
@@ -187,7 +212,7 @@ parse time, whether `foo` is *currently* a variable in the workspace —
 which makes MATLAB's grammar depend on runtime state, not just the text
 being parsed. This app keeps parsing a pure, one-time, stateless step
 (the parser never sees the interpreter's variables), so replicating that
-general rule isn't a good fit architecturally. Instead, `clear`, `hold`, `grid`, `axis`, `disp`, `format`, `box`, `legend`, `close`, `warning`, `xlim`, `ylim`
+general rule isn't a good fit architecturally. Instead, `clear`, `hold`, `grid`, `axis`, `disp`, `format`, `box`, `legend`, `close`, `warning`, `xlim`, `ylim`, `zlim`, `colormap`, `colorbar`, `shading`, `clim`, `caxis`, `drawnow`, `pause`
 are recognized by name directly in the parser: when one of those words is immediately followed by a bareword on the
 same line, it's rewritten to the equivalent parenthesized call before
 anything else happens — so `hold on` and `hold('on')` produce the exact
@@ -266,12 +291,16 @@ numeric/char case described above.
 src/core/       lexer.js, parser.js, values.js, cmath.js, interpreter.js
                 — the language itself, no DOM/UI dependency.
 src/builtins/   elementwise.js, reduction.js, linalg.js, fft.js,
-                system.js, plotting.js, io.js, containers.js, errors.js,
+                system.js, plotting.js (2-D plots, figures, handles,
+                saving, drawnow/pause), plotting3d.js (3-D, images,
+                color), io.js, containers.js, errors.js,
                 logic.js, mathext.js, strings.js, index.js — the
                 function library, registered into the interpreter.
 src/mat5/       mat5.js — the MAT5 binary codec.
-src/plot/       style.js (MATLAB color order, colors, line specs) and
-                toPlotly.js (the figure model -> Plotly traces/layout);
+src/plot/       style.js (MATLAB color order, colors, line specs),
+                colormaps.js (parula, jet, ...), contours.js (contour
+                levels) and toPlotly.js (the figure model -> Plotly
+                traces/layout);
                 no DOM, so plotting is tested under Node.
 src/worker/     session.js — the interpreter side of the page <-> worker
                 message protocol (no DOM, tested under Node);
@@ -281,7 +310,7 @@ src/ui/         main.js, backend.js, vfs.js, matlab-lang.js, styles.css
                   fallback) backend, the IndexedDB file store, CodeMirror
                   setup, drawing figures with Plotly. Everything here is what actually
                   needs a browser; everything above it is plain, testable JS.
-test/           harness.js + seven test files — run with `npm test`.
+test/           harness.js + eight test files — run with `npm test`.
 build.mjs       esbuild bundling script -> dist/ (main.js and worker.js).
 ```
 
@@ -332,6 +361,16 @@ workspace in the page's memory.
 - Each open figure gets its own tab in the Figures panel; click the
   &times; on a tab to close that figure. Closing the last one resets
   figure numbering, so the next plot starts again at Figure 1.
+- 3-D axes (`plot3`, `surf`, ...) are drawn with WebGL; drag to rotate,
+  scroll to zoom. As in MATLAB, surfaces are unlit and the camera is
+  orthographic. Plotly always blends colors across a surface's faces, so
+  `shading flat` looks like `shading interp` (both hide the grid lines).
+- Saved figures are 800-by-600 pixels at 96 dpi; `exportgraphics(...,
+  'Resolution', 300)` or `print(..., '-r300')` scales that up. Passing an
+  axes handle to `saveas`/`exportgraphics` saves its whole figure.
+- `drawnow` and `pause` update figures mid-command only when commands run
+  in the background worker. When the app is opened from `file://` (no
+  worker), figures appear when the command finishes.
 - Each variable in the Workspace panel has a small &times; to delete
   just that one, alongside the existing `clear('name')` / `clear name`
   ways to do it from the Command Window.

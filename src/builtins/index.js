@@ -9,6 +9,7 @@ import { registerLinalg } from './linalg.js';
 import { registerFFT } from './fft.js';
 import { registerSystem } from './system.js';
 import { registerPlotting } from './plotting.js';
+import { registerPlotting3d } from './plotting3d.js';
 import { registerIO } from './io.js';
 import { registerArrayOps } from './arrayops.js';
 import { registerNumeric } from './numeric.js';
@@ -26,6 +27,7 @@ export function buildBuiltinsRegistry() {
   registerFFT(reg);
   registerSystem(reg);
   registerPlotting(reg);
+  registerPlotting3d(reg);
   registerIO(reg);
   registerArrayOps(reg);
   registerNumeric(reg);
