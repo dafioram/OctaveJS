@@ -1,4 +1,4 @@
-// system.js — Constructors (zeros/ones/eye/rand/linspace), type predicates,
+// system.js — Constructors (zeros/ones/eye/linspace; rand & co. are in random.js), type predicates,
 // printing (disp/fprintf/sprintf/num2str), and workspace management
 // (who/whos/clear/exist), plus feval/arrayfun/deal.
 
@@ -14,13 +14,6 @@ function shapeFromArgs(args, fname) {
   while (a.length > 0 && a[a.length - 1].isChar) a = a.slice(0, -1);
   if (a.length === 0) return [1, 1];
   return shapeArgs(a, fname);
-}
-
-function boxMuller() {
-  let u = 0, v = 0;
-  while (u === 0) u = Math.random();
-  while (v === 0) v = Math.random();
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
 
 function formatNumForPrint(x) {
@@ -150,19 +143,6 @@ export function registerSystem(reg) {
   reg.set('zeros', { fn: (args) => { const [r, c] = shapeFromArgs(args, 'zeros'); return [Mat.zeros(r, c)]; } });
   reg.set('ones', { fn: (args) => { const [r, c] = shapeFromArgs(args, 'ones'); const m = Mat.zeros(r, c); m.re.fill(1); return [m]; } });
   reg.set('eye', { fn: (args) => { const [r, c] = shapeFromArgs(args, 'eye'); const m = Mat.zeros(r, c); for (let k = 0; k < Math.min(r, c); k++) m.set2(k, k, 1); return [m]; } });
-  reg.set('rand', { fn: (args) => { const [r, c] = shapeFromArgs(args, 'rand'); const m = Mat.zeros(r, c); for (let k = 0; k < m.numel; k++) m.re[k] = Math.random(); return [m]; } });
-  reg.set('randn', { fn: (args) => { const [r, c] = shapeFromArgs(args, 'randn'); const m = Mat.zeros(r, c); for (let k = 0; k < m.numel; k++) m.re[k] = boxMuller(); return [m]; } });
-  reg.set('randi', {
-    fn: (args) => {
-      let hi = 1, lo = 1;
-      if (args[0].numel === 2) { lo = Math.round(args[0].re[0]); hi = Math.round(args[0].re[1]); }
-      else { hi = Math.round(args[0].toScalarNumber()); lo = 1; }
-      const [r, c] = shapeFromArgs(args.slice(1), 'randi');
-      const m = Mat.zeros(r, c);
-      for (let k = 0; k < m.numel; k++) m.re[k] = lo + Math.floor(Math.random() * (hi - lo + 1));
-      return [m];
-    },
-  });
   reg.set('linspace', {
     fn: (args) => {
       const a = args[0].toScalarNumber(), b = args[1].toScalarNumber();

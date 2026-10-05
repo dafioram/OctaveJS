@@ -80,6 +80,17 @@ value semantics with copy-on-write: `b = a; b(1) = 0` never changes `a`,
 and assigning into a variable nobody else shares (the usual `v(k) = ...`
 loop) updates it in place instead of copying it every time.
 
+**Random numbers:** `rand`, `randn`, `randi`, `randperm` (including
+`randperm(n, k)`), all drawn from one seedable Mersenne Twister — MATLAB's
+default generator, seeded the same way, so a session starts in the same
+state every time, as in MATLAB. `rng(seed)`, `rng('default')`,
+`rng('shuffle')`, and `s = rng; ... rng(s)` to save and restore the
+state. `randn` uses the Box-Muller transform: statistically equivalent to
+MATLAB's, but a different sequence (MATLAB's ziggurat isn't published).
+MATLAB's older `rand('seed', s)`/`rand('state', s)`/`rand('twister', s)`
+syntaxes, which it plans to remove, still work here with a warning.
+Stop restores the generator along with the workspace.
+
 **Math:** the trig/exp/log/rounding family (auto-promoting to complex
 where real MATLAB does, e.g. `sqrt(-1)`, `asin(2)`); `sum`, `prod`, `mean`,
 `median`, `std`, `var`, `min`/`max` (with index output), `range`, `mode`,
@@ -209,7 +220,7 @@ there's a reasonable workaround, it's listed.
 | Not supported | Use instead |
 |---|---|
 | Double-quoted strings (`"hello"`, MATLAB string arrays) | Single-quoted char arrays: `'hello'` |
-| **General command syntax** for arbitrary/user-defined functions, e.g. calling your own `function foo(s)` as `foo bar` | Use the normal parenthesized form: `foo('bar')`. A small, fixed whitelist — `clear`, `hold`, `grid`, `axis`, `disp`, `format`, `box`, `legend`, `close`, `warning`, `xlim`, `ylim`, `zlim`, `colormap`, `colorbar`, `shading`, `clim`, `caxis`, `drawnow`, `pause` — *does* support command syntax (`clear x y`, `hold on`, `grid off`, `axis equal`, `disp hello`, `format long`, `close all`, `legend off`, `colormap hot`, `shading interp`), since those are idiomatic and unambiguous enough to special-case safely; see the note below the table. |
+| **General command syntax** for arbitrary/user-defined functions, e.g. calling your own `function foo(s)` as `foo bar` | Use the normal parenthesized form: `foo('bar')`. A small, fixed whitelist — `clear`, `hold`, `grid`, `axis`, `disp`, `format`, `box`, `legend`, `close`, `warning`, `xlim`, `ylim`, `zlim`, `colormap`, `colorbar`, `shading`, `clim`, `caxis`, `drawnow`, `pause`, `rng` — *does* support command syntax (`clear x y`, `hold on`, `grid off`, `axis equal`, `disp hello`, `format long`, `close all`, `legend off`, `colormap hot`, `shading interp`, `rng default`), since those are idiomatic and unambiguous enough to special-case safely; see the note below the table. |
 | N-D arrays (`zeros(2,2,3)`, `cat(3, A, B)`, `A(i,j,k) = v` with `k > 1`) — these give a clear error rather than a truncated result. Trailing singleton dimensions *are* accepted, as in MATLAB: `zeros(2,3,1)`, `A(:,:,1)`, `[r,c,p] = size(A)`, `size(A, 3)` (= 1), `sum(A, 3)`, `permute(A, [2 1])` | Reshape/index a 2-D matrix, or keep the pages in a cell array (`pages{k} = ...`) |
 | Integer classes (`int8`, `uint16`, ...) — everything is `double` (or tagged `logical`/`char`) | Just use `double`; a trailing class-name argument to `zeros`/`ones` (e.g. `zeros(3,'int8')`) is silently ignored |
 | `()` followed by more indexing in an assignment, e.g. `x(2)(3) = 1` (MATLAB rejects this too; `s(2).f = 1` and `c{2}(3) = 1` *are* supported) | Use an intermediate variable |
@@ -226,7 +237,7 @@ parse time, whether `foo` is *currently* a variable in the workspace —
 which makes MATLAB's grammar depend on runtime state, not just the text
 being parsed. This app keeps parsing a pure, one-time, stateless step
 (the parser never sees the interpreter's variables), so replicating that
-general rule isn't a good fit architecturally. Instead, `clear`, `hold`, `grid`, `axis`, `disp`, `format`, `box`, `legend`, `close`, `warning`, `xlim`, `ylim`, `zlim`, `colormap`, `colorbar`, `shading`, `clim`, `caxis`, `drawnow`, `pause`
+general rule isn't a good fit architecturally. Instead, `clear`, `hold`, `grid`, `axis`, `disp`, `format`, `box`, `legend`, `close`, `warning`, `xlim`, `ylim`, `zlim`, `colormap`, `colorbar`, `shading`, `clim`, `caxis`, `drawnow`, `pause`, `rng`
 are recognized by name directly in the parser: when one of those words is immediately followed by a bareword on the
 same line, it's rewritten to the equivalent parenthesized call before
 anything else happens — so `hold on` and `hold('on')` produce the exact
@@ -310,7 +321,8 @@ src/builtins/   elementwise.js, reduction.js, linalg.js, fft.js,
                 color), io.js, containers.js, errors.js,
                 logic.js, mathext.js, strings.js, ode.js (ODE
                 solvers), optim.js (fzero, fmin*, integral), interp.js
-                (interp1/2, spline, pchip), numutil.js, index.js — the
+                (interp1/2, spline, pchip), random.js (rand & co., rng),
+                numutil.js, index.js — the
                 function library, registered into the interpreter.
 src/mat5/       mat5.js — the MAT5 binary codec.
 src/plot/       style.js (MATLAB color order, colors, line specs),
@@ -326,7 +338,7 @@ src/ui/         main.js, backend.js, vfs.js, matlab-lang.js, styles.css
                   fallback) backend, the IndexedDB file store, CodeMirror
                   setup, drawing figures with Plotly. Everything here is what actually
                   needs a browser; everything above it is plain, testable JS.
-test/           harness.js + nine test files — run with `npm test`.
+test/           harness.js + ten test files — run with `npm test`.
 build.mjs       esbuild bundling script -> dist/ (main.js and worker.js).
 ```
 
