@@ -152,7 +152,7 @@ export function registerSystem(reg) {
   reg.set('disp', {
     fn: (args, _n, ctx) => {
       const a = args[0];
-      ctx.interp.print((a instanceof Mat && a.isChar ? a.toJSString() : formatValue(a, ctx.interp.displayFormat)) + '\n');
+      ctx.interp.print((a instanceof Mat && a.isChar && a.rows <= 1 ? a.toJSString() : formatValue(a, ctx.interp.displayFormat)) + '\n');
       return [];
     },
   });

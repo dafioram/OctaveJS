@@ -430,6 +430,173 @@ export function registerMathExt(reg) {
     },
   });
 
+  // conv2(A, B) | conv2(A, B, shape) | conv2(u, v, A) | conv2(u, v, A, shape):
+  // 2-D convolution ('full', 'same' or 'valid'); with two vectors first,
+  // the columns of A are convolved with u and then the rows with v.
+  const conv2 = (A, B, shape) => {
+    const ma = A.rows, na = A.cols, mb = B.rows, nb = B.cols;
+    const fr = ma && mb ? ma + mb - 1 : 0, fc = na && nb ? na + nb - 1 : 0;
+    const complex = A.isComplex || B.isComplex;
+    const re = new Float64Array(fr * fc), im = complex ? new Float64Array(fr * fc) : null;
+    for (let qa = 0; qa < na; qa++) for (let pa = 0; pa < ma; pa++) {
+      const ar = A.re[qa * ma + pa], ai = A.isComplex ? A.im[qa * ma + pa] : 0;
+      if (ar === 0 && ai === 0) continue;
+      for (let qb = 0; qb < nb; qb++) for (let pb = 0; pb < mb; pb++) {
+        const k = (qa + qb) * fr + pa + pb;
+        if (!complex) { re[k] += ar * B.re[qb * mb + pb]; continue; }
+        const [pr, pi] = C.cmul(ar, ai, B.re[qb * mb + pb], B.isComplex ? B.im[qb * mb + pb] : 0);
+        re[k] += pr; im[k] += pi;
+      }
+    }
+    let r0 = 0, c0 = 0, rows = fr, cols = fc;
+    if (shape === 'same') { r0 = Math.floor(mb / 2); c0 = Math.floor(nb / 2); rows = ma; cols = na; }
+    else if (shape === 'valid') { r0 = mb - 1; c0 = nb - 1; rows = Math.max(ma - mb + 1, 0); cols = Math.max(na - nb + 1, 0); }
+    else if (shape !== 'full') throw new MatlabError("conv2: shape must be 'full', 'same' or 'valid'");
+    const out = new Mat(rows, cols, new Float64Array(rows * cols), complex ? new Float64Array(rows * cols) : null);
+    for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) {
+      out.re[c * rows + r] = re[(c + c0) * fr + r + r0];
+      if (complex) out.im[c * rows + r] = im[(c + c0) * fr + r + r0];
+    }
+    return out;
+  };
+  const shapeOf = (v, dflt) => (v ? v.toJSString().toLowerCase() : dflt);
+  reg.set('conv2', {
+    fn: (args) => {
+      const isText = (v) => v && v.isChar;
+      if (args.length >= 3 && !isText(args[2])) {
+        const [u, v, A] = args;
+        const col = new Mat(u.numel, 1, Float64Array.from(u.re), u.im ? Float64Array.from(u.im) : null);
+        const row = new Mat(1, v.numel, Float64Array.from(v.re), v.im ? Float64Array.from(v.im) : null);
+        const shape = shapeOf(args[3], 'full');
+        if (shape === 'full') return [conv2(conv2(A, col, 'full'), row, 'full')];
+        return [conv2(A, Mat.fromRows(Array.from({ length: col.numel }, (_, i) => Array.from({ length: row.numel }, (_, j) => col.re[i] * row.re[j]))), shape)];
+      }
+      if (args.length < 2) throw new MatlabError('conv2: expected conv2(A, B)');
+      return [conv2(args[0], args[1], shapeOf(args[2], 'full'))];
+    },
+  });
+  // filter2(h, X) | filter2(h, X, shape): correlation, conv2(X, rot90(h, 2), shape), default 'same'.
+  reg.set('filter2', {
+    fn: (args) => {
+      if (args.length < 2) throw new MatlabError('filter2: expected filter2(h, X)');
+      const [h, X] = args;
+      const n = h.numel;
+      const rot = new Mat(h.rows, h.cols, Float64Array.from({ length: n }, (_, k) => h.re[n - 1 - k]), h.im ? Float64Array.from({ length: n }, (_, k) => h.im[n - 1 - k]) : null);
+      return [conv2(X, rot, shapeOf(args[2], 'same'))];
+    },
+  });
+
+  // factor(n): the prime factors of n, in ascending order.
+  reg.set('factor', {
+    fn: (args) => {
+      if (args[0].numel !== 1) throw new MatlabError('factor: N must be a scalar');
+      let n = args[0].re[0];
+      if (!Number.isInteger(n) || n < 0) throw new MatlabError('factor: N must be a nonnegative integer');
+      if (n > Number.MAX_SAFE_INTEGER) throw new MatlabError('factor: N is too large (the maximum is flintmax)');
+      if (n < 4) return [Mat.scalar(n)];
+      const f = [];
+      for (const p of [2, 3]) while (n % p === 0) { f.push(p); n /= p; }
+      for (let p = 5; p * p <= n; p += 6) {
+        while (n % p === 0) { f.push(p); n /= p; }
+        while (n % (p + 2) === 0) { f.push(p + 2); n /= p + 2; }
+      }
+      if (n > 1) f.push(n);
+      return [new Mat(1, f.length, Float64Array.from(f))];
+    },
+  });
+
+  // perms(v): all permutations of v's elements, one per row, in reverse
+  // lexicographic order of positions (MATLAB's order).
+  reg.set('perms', {
+    fn: (args) => {
+      const v = args[0];
+      const n = v.numel;
+      if (n > 11) throw new MatlabError('perms: too many elements (the result would have more than 11! rows)');
+      const rows = [];
+      const idx = Array.from({ length: n }, (_, i) => i);
+      const rec = (prefix, rest) => {
+        if (rest.length === 0) { rows.push(prefix); return; }
+        for (let i = rest.length - 1; i >= 0; i--) rec([...prefix, rest[i]], [...rest.slice(0, i), ...rest.slice(i + 1)]);
+      };
+      rec([], idx);
+      const R = rows.length;
+      if (v instanceof Cell) return [new Cell(R, n, Array.from({ length: R * n }, (_, k) => v.data[rows[k % R][Math.floor(k / R)]]))];
+      const out = new Mat(R, n, new Float64Array(R * n), v.im ? new Float64Array(R * n) : null, { isChar: v.isChar, isLogical: v.isLogical });
+      for (let c = 0; c < n; c++) for (let r = 0; r < R; r++) {
+        out.re[c * R + r] = v.re[rows[r][c]];
+        if (out.im) out.im[c * R + r] = v.im[rows[r][c]];
+      }
+      return [out];
+    },
+  });
+
+  // [N, D] = rat(X) | rat(X, tol) | S = rat(X): continued-fraction rational
+  // approximation within tol (default 1e-6*norm(X(:), 1)).
+  const ratTerms = (x, tol) => {
+    if (!Number.isFinite(x)) return { N: Number.isNaN(x) ? 0 : Math.sign(x), D: 0, terms: [x] };
+    let y = x, n0 = 1, n1 = 0, d0 = 0, d1 = 1;
+    const terms = [];
+    for (let k = 0; k < 64; k++) {
+      const d = Math.round(y);
+      terms.push(d);
+      [n0, n1] = [d * n0 + n1, n0];
+      [d0, d1] = [d * d0 + d1, d0];
+      const frac = y - d;
+      if (frac === 0 || Math.abs(x - n0 / d0) < Math.max(tol, Math.abs(x) * Number.EPSILON)) break;
+      y = 1 / frac;
+    }
+    return { N: n0 * Math.sign(d0), D: Math.abs(d0), terms };
+  };
+  const ratTol = (X, args) => (args.length >= 2 ? args[1].toScalarNumber() : 1e-6 * Array.from(X.re).filter(Number.isFinite).reduce((s, v) => s + Math.abs(v), 0));
+  reg.set('rat', {
+    fn: (args, nargout) => {
+      const X = requireReal(args[0], 'rat');
+      const tol = ratTol(X, args);
+      const results = Array.from(X.re, (x) => ratTerms(x, tol));
+      if (nargout >= 2) {
+        return [new Mat(X.rows, X.cols, Float64Array.from(results, r => r.N)), new Mat(X.rows, X.cols, Float64Array.from(results, r => r.D))];
+      }
+      // The expansion as text: 3 + 1/(7 + 1/16)
+      const lines = results.map(({ terms }) => {
+        if (!Number.isFinite(terms[0])) return Number.isNaN(terms[0]) ? 'NaN' : terms[0] > 0 ? 'Inf' : '-Inf';
+        // The innermost term is bare unless negative: 3 + 1/(7 + 1/16), 1 + 1/(-4).
+        const last = terms[terms.length - 1];
+        let s = last < 0 ? `(${last})` : String(last);
+        for (let k = terms.length - 2; k >= 0; k--) s = `${terms[k]} + 1/${k === terms.length - 2 ? s : `(${s})`}`;
+        return s;
+      });
+      const width = Math.max(0, ...lines.map(l => l.length));
+      const m = new Mat(lines.length, width, new Float64Array(lines.length * width).fill(32), null, { isChar: true });
+      lines.forEach((l, r) => { for (let c = 0; c < l.length; c++) m.re[c * lines.length + r] = l.charCodeAt(c); });
+      return [m];
+    },
+  });
+  // rats(X) | rats(X, strlen): 'N/D' text for each element, right-aligned
+  // in fields of strlen characters (default 13).
+  reg.set('rats', {
+    fn: (args) => {
+      const X = requireReal(args[0], 'rats');
+      const strlen = args.length >= 2 ? Math.round(args[1].toScalarNumber()) : 13;
+      const tol = 1e-6 * Array.from(X.re).filter(Number.isFinite).reduce((s, v) => s + Math.abs(v), 0);
+      const fmt = (x) => {
+        if (Number.isNaN(x)) return 'NaN';
+        if (!Number.isFinite(x)) return x > 0 ? 'Inf' : '-Inf';
+        const { N, D } = ratTerms(x, Math.max(tol / Math.max(X.numel, 1), Math.abs(x) * 1e-10));
+        return D === 1 ? String(N) : `${N}/${D}`;
+      };
+      const lines = [];
+      for (let r = 0; r < X.rows; r++) {
+        let line = '';
+        for (let c = 0; c < X.cols; c++) line += fmt(X.re[c * X.rows + r]).padStart(strlen) + ' ';
+        lines.push(line);
+      }
+      const width = Math.max(0, ...lines.map(l => l.length));
+      const m = new Mat(lines.length, width, new Float64Array(lines.length * width).fill(32), null, { isChar: true });
+      lines.forEach((l, r) => { for (let c = 0; c < l.length; c++) m.re[c * lines.length + r] = l.charCodeAt(c); });
+      return [m];
+    },
+  });
+
   // [q, r] = deconv(y, a): polynomial division, y = conv(a, q) + r.
   reg.set('deconv', {
     fn: (args, nargout) => {

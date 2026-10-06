@@ -15,8 +15,10 @@
   `test/run_tests7.mjs` covers 2-D plotting (model and Plotly output) and
   `test/run_tests8.mjs` 3-D plots, images, colormaps, saving figures and
   drawnow/pause. `test/run_tests9.mjs` covers the numerical solvers
-  (ODEs, fzero/fmin*, integral, interpolation, matrix functions) and
-  `test/run_tests10.mjs` random numbers (rng, statistics, Stop restore).
+  (ODEs, fzero/fmin*, integral, interpolation, matrix functions),
+  `test/run_tests10.mjs` random numbers (rng, statistics, Stop restore)
+  and `test/run_tests11.mjs` the math and data library (trig/special
+  functions, sets, statistics, fft2/conv2, number theory).
 - New MATLAB-compatibility fixes get a regression test in
   `test/run_tests4.mjs`; tests for language features go in
   `test/run_tests5.mjs` and for library functions in `test/run_tests6.mjs`
