@@ -472,6 +472,11 @@ class Parser {
         node = { type: 'Transpose', expr: node, conjugate: conj };
         continue;
       }
+      // MATLAB allows only a field access after (): a(1)(2), f(x)(2) and
+      // a(1){2} are errors (chained indexing is an Octave extension).
+      if (node.type === 'Index' && (this.at(TT.LPAREN) || this.at(TT.LBRACE))) {
+        throw new ParseError("Indexing with parentheses '()' must appear as the last operation of a valid indexing expression.", this.cur());
+      }
       if (this.at(TT.LPAREN)) {
         this.advance();
         this.bracketStack.push('paren');

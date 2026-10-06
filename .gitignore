@@ -22,3 +22,6 @@ Thumbs.db
 # Env / local overrides (not currently used, but standard to exclude)
 .env
 .env.local
+
+# Coverage report (npm run coverage)
+coverage/

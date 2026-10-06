@@ -436,7 +436,7 @@ export class Interpreter {
     if (!last) {
       // The only form allowed past `(...)` is s(k).field on a struct array.
       const next = chain[i + 1];
-      if (next.kind !== 'field') throw new MatlabError('()-indexing must appear last in an index expression.');
+      if (next.kind !== 'field') throw new MatlabError("Indexing with parentheses '()' must appear as the last operation of a valid indexing expression.");
       let s;
       if (isBlank) s = new StructArray(0, 0, []);
       else if (cur instanceof StructArray) s = this._own(cur, owned);
@@ -636,7 +636,8 @@ export class Interpreter {
     switch (node.type) {
       case 'Num': return [Mat.scalar(node.value)];
       case 'ImagNum': return [Mat.complexScalar(0, node.value)];
-      case 'Str': return [Mat.fromString(node.value)];
+      // The literal '' is 0x0, as in MATLAB (other empty text is 1x0).
+      case 'Str': return [node.value === '' ? new Mat(0, 0, new Float64Array(0), null, { isChar: true }) : Mat.fromString(node.value)];
       case 'End': {
         if (this.endStack.length === 0) throw new MatlabError("'end' used outside of an indexing expression");
         return [Mat.scalar(this.endStack[this.endStack.length - 1])];
@@ -647,7 +648,7 @@ export class Interpreter {
         if ((locals && locals.has(node.name)) || this.funcTable.has(node.name) || this.builtins.has(node.name) || this.files.has(node.name + '.m')) {
           return this.callNamed(node.name, [], nargout, scope);
         }
-        throw new MatlabError(`Undefined variable or function '${node.name}'`, 'MATLAB:UndefinedFunction');
+        throw new MatlabError(`Unrecognized function or variable '${node.name}'.`, 'MATLAB:UndefinedFunction');
       }
       case 'Paren': return [this.evalExpr(node.expr, scope)];
       case 'Range': return [this.evalRange(node, scope)];
@@ -773,7 +774,7 @@ export class Interpreter {
     mats = mats.filter(m => !(m.isEmpty && m.rows === 0 && m.cols === 0));
     if (mats.length === 0) return Mat.empty();
     const rows = mats[0].rows;
-    for (const m of mats) if (m.rows !== rows) throw new MatlabError('Dimension mismatch in matrix literal (row heights differ)');
+    for (const m of mats) if (m.rows !== rows) throw new MatlabError('Dimensions of arrays being concatenated are not consistent.', 'MATLAB:catenate:dimensionMismatch');
     const cols = mats.reduce((s, m) => s + m.cols, 0);
     const anyComplex = mats.some(m => m.isComplex);
     const re = new Float64Array(rows * cols);
@@ -796,7 +797,7 @@ export class Interpreter {
     mats = mats.filter(m => !(m.isEmpty && m.rows === 0 && m.cols === 0));
     if (mats.length === 0) return Mat.empty();
     const cols = mats[0].cols;
-    for (const m of mats) if (m.cols !== cols) throw new MatlabError('Dimension mismatch in matrix literal (row widths differ)');
+    for (const m of mats) if (m.cols !== cols) throw new MatlabError('Dimensions of arrays being concatenated are not consistent.', 'MATLAB:catenate:dimensionMismatch');
     const rows = mats.reduce((s, m) => s + m.rows, 0);
     const anyComplex = mats.some(m => m.isComplex);
     const re = new Float64Array(rows * cols);
@@ -939,7 +940,7 @@ export class Interpreter {
       try { colSel = this._resolveDimSelector(argNodes[1], scope, arr.cols); } finally { this.endStack.pop(); }
       const positions = [];
       for (const c of colSel) for (const r of rowSel) {
-        if (r >= arr.rows || c >= arr.cols) throw new MatlabError(`Index exceeds array dimensions (size is ${arr.sizeStr()}).`, 'MATLAB:badsubscript');
+        if (r >= arr.rows || c >= arr.cols) throw subscriptError(r >= arr.rows ? 1 : 2, r >= arr.rows ? arr.rows : arr.cols);
         positions.push(c * arr.rows + r);
       }
       return { positions, rows: rowSel.length, cols: colSel.length };
@@ -957,7 +958,13 @@ export class Interpreter {
     }
     if (this.builtins.has(name)) {
       const spec = this.builtins.get(name);
-      const result = spec.fn(argValues, nargout, this._builtinCtx(callerScope));
+      if (spec.minArgs && argValues.length < spec.minArgs) throw new MatlabError('Not enough input arguments.', 'MATLAB:minrhs');
+      if (spec.numericArgs) {
+        const checked = spec.numericArgs === 'first' ? argValues.slice(0, 1) : argValues;
+        const odd = checked.find(a => !(a instanceof Mat));
+        if (odd) throw new MatlabError(`Undefined function '${name}' for input arguments of type '${valueClassName(odd)}'.`, 'MATLAB:UndefinedFunction');
+      }
+      const result = runBuiltin(name, spec.fn, argValues, nargout, this._builtinCtx(callerScope));
       return result === undefined ? [] : result;
     }
     const mfile = this.loadMFile(name);
@@ -971,11 +978,11 @@ export class Interpreter {
       this.runProgram(mfile.ast, callerScope || this.workspace);
       return [];
     }
-    throw new MatlabError(`Undefined function '${name}'`, 'MATLAB:UndefinedFunction');
+    throw new MatlabError(`Unrecognized function or variable '${name}'.`, 'MATLAB:UndefinedFunction');
   }
 
   callHandle(fh, argValues, nargout, callerScope) {
-    if (fh.builtin) return fh.builtin(argValues, nargout, this._builtinCtx(callerScope));
+    if (fh.builtin) return runBuiltin(fh.name || 'builtin', fh.builtin, argValues, nargout, this._builtinCtx(callerScope));
     // Resolve names in the context of the file the handle was created in,
     // so a handle to a local subfunction keeps working outside that file.
     this.localFnStack.push(fh.locals || null);
@@ -1082,7 +1089,7 @@ export class Interpreter {
     const im = mat.isComplex ? new Float64Array(positions.length) : null;
     for (let k = 0; k < positions.length; k++) {
       const p = positions[k];
-      if (p < 0 || p >= mat.numel) throw new MatlabError(`Index (${p + 1}) out of bounds (numel=${mat.numel})`, 'MATLAB:badsubscript');
+      if (p < 0 || p >= mat.numel) throw new MatlabError(`Index exceeds the number of array elements. Index must not exceed ${mat.numel}.`, 'MATLAB:badsubscript');
       re[k] = mat.re[p];
       if (im) im[k] = mat.im[p];
     }
@@ -1103,9 +1110,7 @@ export class Interpreter {
     for (let c = 0; c < cols; c++) {
       for (let r = 0; r < rows; r++) {
         const rr = rowSel[r], cc = colSel[c];
-        if (rr < 0 || rr >= mat.rows || cc < 0 || cc >= mat.cols) {
-          throw new MatlabError(`Index out of bounds (size is ${mat.sizeStr()})`, 'MATLAB:badsubscript');
-        }
+        if (rr < 0 || rr >= mat.rows || cc < 0 || cc >= mat.cols) throw subscriptError(rr >= mat.rows ? 1 : 2, rr >= mat.rows ? mat.rows : mat.cols);
         const src = cc * mat.rows + rr, dst = c * rows + r;
         re[dst] = mat.re[src];
         if (im) im[dst] = mat.im[src];
@@ -1129,7 +1134,7 @@ export class Interpreter {
     const positions = [];
     for (let k = 0; k < idxMat.numel; k++) {
       const v = idxMat.re[k];
-      if (!Number.isInteger(v) || v < 1) throw new MatlabError(`Array indices must be positive integers or logical values (got ${v})`, 'MATLAB:badsubscript');
+      if (!Number.isInteger(v) || v < 1) throw new MatlabError('Array indices must be positive integers or logical values.', 'MATLAB:badsubscript');
       positions.push(v - 1);
     }
     return positions;
@@ -1342,7 +1347,7 @@ function linearResultShape(arr, idx, n) {
 function bindParams(scope, params, args, what) {
   const hasVarargin = params.length > 0 && params[params.length - 1] === 'varargin';
   const fixed = hasVarargin ? params.length - 1 : params.length;
-  if (args.length > fixed && !hasVarargin) throw new MatlabError(`Too many input arguments to ${what}`);
+  if (args.length > fixed && !hasVarargin) throw new MatlabError('Too many input arguments.', 'MATLAB:TooManyInputs');
   for (let i = 0; i < Math.min(fixed, args.length); i++) scope.set(params[i], args[i]);
   if (hasVarargin) {
     const extra = args.slice(fixed);
@@ -1351,11 +1356,45 @@ function bindParams(scope, params, args, what) {
   scope.set('nargin', Mat.scalar(args.length));
 }
 
+// MATLAB's error for a subscript past the end of dimension `position`.
+function subscriptError(position, limit) {
+  return new MatlabError(`Index in position ${position} exceeds array bounds. Index must not exceed ${limit}.`, 'MATLAB:badsubscript');
+}
+
+// Calls a builtin's implementation. A JavaScript exception escaping it
+// (a TypeError from an argument the code didn't expect, say) becomes a
+// MatlabError: MATLAB's "Undefined function 'sin' for input arguments of
+// type 'cell'." when a cell, struct or function handle was passed, "Not
+// enough input arguments." when there were none, or an
+// error flagged `internal` (a bug in the builtin; the robustness tests
+// fail on these). Control-flow signals, recursion overflow and parse
+// errors from eval & co. pass through unchanged.
+function runBuiltin(name, fn, args, nargout, ctx) {
+  try {
+    return fn(args, nargout, ctx);
+  } catch (e) {
+    if (!(e instanceof Error) || e instanceof MatlabError || isStackOverflow(e) || e.name === 'ParseError' || e.name === 'LexError') throw e;
+    if (args.length === 0) throw new MatlabError('Not enough input arguments.', 'MATLAB:minrhs');
+    const odd = args.find(a => !(a instanceof Mat));
+    if (odd) {
+      throw new MatlabError(`Undefined function '${name}' for input arguments of type '${valueClassName(odd)}'.`, 'MATLAB:UndefinedFunction');
+    }
+    const err = new MatlabError(`${name}: internal error (${e.message})`, 'MatWeb:internalError');
+    err.internal = true;
+    err.cause = e;
+    throw err;
+  }
+}
+
+function isStackOverflow(e) {
+  return e instanceof RangeError && /call stack/i.test(e.message);
+}
+
 // Any error thrown while running user code, as a MatlabError (so try/catch
 // and the console can report it uniformly).
 export function toMatlabError(e) {
   if (e instanceof MatlabError) return e;
-  if (e instanceof RangeError) return new MatlabError('Maximum recursion depth exceeded (out of JavaScript stack space)', 'MATLAB:recursionLimit');
+  if (isStackOverflow(e)) return new MatlabError('Maximum recursion depth exceeded (out of JavaScript stack space)', 'MATLAB:recursionLimit');
   if (e && (e.name === 'ParseError' || e.name === 'LexError')) return new MatlabError(e.message, 'MATLAB:parse');
   return new MatlabError(e && e.message ? e.message : String(e));
 }
@@ -1390,7 +1429,7 @@ function taggedLogical(mat) { mat.isLogical = true; return mat; }
 
 function matMultiply(a, b) {
   if (a.numel === 1 || b.numel === 1) return Mat.broadcastBinary(a, b, C.cmul);
-  if (a.cols !== b.rows) throw new MatlabError(`Inner matrix dimensions must agree (${a.sizeStr()} * ${b.sizeStr()})`);
+  if (a.cols !== b.rows) throw new MatlabError('Incorrect dimensions for matrix multiplication. Check that the number of columns in the first matrix matches the number of rows in the second matrix. To operate on each element of the matrix individually, use TIMES (.*) for elementwise multiplication.', 'MATLAB:innerdim');
   const rows = a.rows, cols = b.cols, inner = a.cols;
   const anyComplex = a.isComplex || b.isComplex;
   const re = new Float64Array(rows * cols);
@@ -1506,7 +1545,7 @@ function summarizeValue(v, inCell) {
   if (v instanceof FunctionHandle) return v.displayName();
   if (v instanceof Cell) return inCell ? `${v.sizeStr()} cell` : `{${v.sizeStr()} cell}`;
   if (v instanceof StructArray) return inCell ? `${v.sizeStr()} ${v.className()}` : `[${v.sizeStr()} ${v.className()}]`;
-  if (v.isChar && v.rows === 1) return `'${v.toJSString()}'`;
+  if (v.isChar && (v.rows === 1 || (v.isEmpty && !inCell))) return `'${v.toJSString()}'`;
   const cls = v.className();
   if (v.isEmpty) return inCell ? `${v.sizeStr()} ${cls}` : '[]';
   if (v.rows === 1 && v.numel <= 10 && !v.isComplex) {
@@ -1544,9 +1583,21 @@ function formatStruct(s) {
   return `${head} with fields:\n\n` + s.fieldNames.map(f => `    ${f}`).join('\n');
 }
 
+// MATLAB's display of an empty array: [] for a 0x0 double, otherwise a
+// description such as "0x3 empty double matrix".
+function formatEmpty(mat) {
+  const size = mat.sizeStr();
+  if (mat.isChar) return `  ${size} empty char array`;
+  if (mat.isLogical) return `  ${size} empty logical array`;
+  if (mat.rows === 0 && mat.cols === 0) return '     []';
+  const shape = mat.rows === 1 ? 'row vector' : mat.cols === 1 ? 'column vector' : 'matrix';
+  return `  ${size} empty ${mat.isComplex ? 'complex ' : ''}double ${shape}`;
+}
+
 // `style` is the `format` setting: 'short' shows 4 decimals; 'long' shows
 // about 16 significant digits (15 decimals below 10, fewer above).
 export function formatMat(mat, style = 'short') {
+  if (mat.isEmpty) return formatEmpty(mat);
   if (mat.isChar) {
     if (mat.rows <= 1) return mat.toJSString();
     // A char matrix shows one row per line.
@@ -1561,7 +1612,6 @@ export function formatMat(mat, style = 'short') {
   const long = style === 'long';
   const decimals = (mag) => (!long ? 4 : mag < 10 ? 15 : Math.max(15 - Math.floor(Math.log10(mag)), 1));
   const exp = (x) => fmtExp(x, long ? 15 : 4);
-  if (mat.isEmpty) return `     [](${mat.rows}x${mat.cols})`;
   if (mat.isComplex) return formatComplex(mat, decimals, exp);
   const n = mat.numel;
   let allInt = true, maxAbs = 0;

@@ -1,0 +1,22 @@
+>> e = []
+e =
+     []
+>> z3 = zeros(0, 3)
+z3 =
+  0x3 empty double matrix
+>> r = zeros(1, 0)
+r =
+  1x0 empty double row vector
+>> c = zeros(0, 1)
+c =
+  0x1 empty double column vector
+>> es = ''
+es =
+  0x0 empty char array
+>> l = true(0, 2)
+l =
+  0x2 empty logical array
+>> ce = {}
+ce =
+  0x0 empty cell array
+>> disp([])

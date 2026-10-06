@@ -76,6 +76,7 @@ function dropNaNRows(cols) {
   return cols.map(c => c.filter((_, r) => keep[r]));
 }
 function covMatrix(cols, population) {
+  if (cols.length === 0) return Mat.scalar(NaN); // cov([]) is NaN, as in MATLAB
   const p = cols.length, n = cols[0].length;
   const mus = cols.map(c => (n ? mean(c) : NaN));
   const out = Mat.zeros(p, p);
@@ -224,7 +225,7 @@ export function registerStats(reg) {
       }
       if (!['all', 'complete', 'pairwise'].includes(rowsMode)) throw new MatlabError("corrcoef: Rows must be 'all', 'complete' or 'pairwise'");
       let { cols } = variablesOf(data, 'corrcoef');
-      if (cols.length === 1) cols = [cols[0]]; // a single variable correlates with itself
+      if (cols.length === 0) return nargout >= 2 ? [Mat.scalar(NaN), Mat.scalar(NaN)] : [Mat.scalar(NaN)];
       if (rowsMode !== 'all') cols = dropNaNRows(cols);
       const C = covMatrix(cols, false);
       const p = cols.length;

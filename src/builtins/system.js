@@ -21,12 +21,44 @@ function shapeFromArgs(args, fname) {
 
 export { doSprintf, flattenArgsForPrintf };
 
+// str2double's parser: the whole text must be one real or complex number
+// (digits with optional commas as thousands separators, exponent with e or
+// d, Inf, NaN, i/j imaginary unit); anything else is NaN.
+const REAL = String.raw`(?:(?:\d[\d,]*(?:\.\d*)?|\.\d+)(?:[eEdD][+-]?\d+)?|inf|nan)`;
+const REAL_RE = new RegExp(`^([+-]?${REAL})$`, 'i');
+const IMAG_RE = new RegExp(`^([+-]?${REAL})?\\s*([+-])\\s*(${REAL})?\\s*\\*?\\s*[ij]$`, 'i');
+const IMAG_ONLY_RE = new RegExp(`^([+-]?)(${REAL})?\\s*\\*?\\s*[ij]$`, 'i');
+function realValue(t) {
+  const s = t.replace(/,/g, '').replace(/[dD]/, 'e').toLowerCase();
+  if (/^[+-]?inf$/.test(s)) return s.startsWith('-') ? -Infinity : Infinity;
+  if (/^[+-]?nan$/.test(s)) return NaN;
+  return Number(s);
+}
+export function parseNumberText(text) {
+  const t = text.trim();
+  let m = REAL_RE.exec(t);
+  if (m) return [realValue(m[1]), 0];
+  m = IMAG_RE.exec(t);
+  if (m && m[1] !== undefined) return [realValue(m[1]), (m[2] === '-' ? -1 : 1) * (m[3] === undefined ? 1 : realValue(m[3]))];
+  m = IMAG_ONLY_RE.exec(t);
+  if (m) return [0, (m[1] === '-' ? -1 : 1) * (m[2] === undefined ? 1 : realValue(m[2]))];
+  return [NaN, 0];
+}
+
+// Memory a value takes, as whos reports it.
+function valueBytes(v) {
+  if (v instanceof Mat) return v.numel * (v.isChar ? 2 : v.isLogical ? 1 : v.isComplex ? 16 : 8);
+  if (v instanceof Cell) return v.data.reduce((s, x) => s + 104 + valueBytes(x), 0);
+  if (v instanceof FunctionHandle) return 32;
+  if (v && v.data && v.fieldNames) return 64 + v.data.reduce((s, m) => s + [...m.values()].reduce((t, x) => t + 104 + valueBytes(x), 0), 0);
+  return 0;
+}
+
 export function registerSystem(reg) {
   // Constants (real MATLAB implements these as ordinary functions too, so
   // they can be shadowed by a variable of the same name — our normal
   // "check scope first" lookup already gives us that for free).
   reg.set('pi', { fn: () => [Mat.scalar(Math.PI)] });
-  reg.set('e', { fn: () => [Mat.scalar(Math.E)] });
   // Inf(2, 3), NaN(n), ... fill an array, like zeros.
   const constFill = (v, name) => ({ fn: (args) => { const [r, c] = shapeFromArgs(args, name); const m = Mat.zeros(r, c); m.re.fill(v); return [m]; } });
   reg.set('Inf', constFill(Infinity, 'Inf'));
@@ -93,10 +125,13 @@ export function registerSystem(reg) {
   });
   reg.set('logspace', {
     fn: (args) => {
-      const a = args[0].toScalarNumber(), b = args[1].toScalarNumber();
-      const n = args.length >= 3 ? Math.round(args[2].toScalarNumber()) : 50;
+      const a = args[0].toScalarNumber();
+      let b = args[1].toScalarNumber();
+      // MATLAB: logspace(a, pi) spaces the points between 10^a and pi.
+      if (b === Math.PI) b = Math.log10(Math.PI);
+      const n = args.length >= 3 ? Math.floor(args[2].toScalarNumber()) : 50;
       const re = new Float64Array(Math.max(n, 0));
-      for (let k = 0; k < n; k++) re[k] = Math.pow(10, a + (b - a) * k / (n - 1));
+      for (let k = 0; k < n; k++) re[k] = Math.pow(10, k === n - 1 ? b : a + (b - a) * k / (n - 1));
       return [new Mat(1, re.length, re)];
     },
   });
@@ -123,7 +158,6 @@ export function registerSystem(reg) {
   reg.set('islogical', { fn: (args) => [Mat.logicalScalar(args[0] instanceof Mat && args[0].isLogical)] });
   reg.set('isreal', { fn: (args) => [Mat.logicalScalar(args[0] instanceof Mat && !args[0].isComplex)] });
   reg.set('iscomplex', { fn: (args) => [Mat.logicalScalar(!!args[0].isComplex)] });
-  reg.set('is_function_handle', { fn: (args) => [Mat.logicalScalar(args[0] instanceof FunctionHandle)] });
 
   reg.set('double', {
     fn: (args) => {
@@ -142,16 +176,41 @@ export function registerSystem(reg) {
   });
   reg.set('char', {
     fn: (args) => {
-      const a = args[0];
-      if (a.isChar) return [a];
-      const out = a.clone(); out.isChar = true; out.isLogical = false;
-      return [out];
+      // char(A) with numeric A keeps its shape; text arguments (char
+      // arrays, cell arrays of text, several arguments) become the rows of
+      // a char matrix padded with blanks.
+      if (args.length === 1 && args[0] instanceof Mat) {
+        const a = args[0];
+        if (a.isChar) return [a];
+        const out = new Mat(a.rows, a.cols, Float64Array.from(a.re), null, { isChar: true });
+        return [out];
+      }
+      const lines = [];
+      const addRows = (m) => {
+        if (m.isChar && m.rows === 0) { lines.push(''); return; }
+        for (let r = 0; r < m.rows; r++) {
+          let s = '';
+          for (let c = 0; c < m.cols; c++) s += String.fromCharCode(m.re[c * m.rows + r]);
+          lines.push(s);
+        }
+      };
+      for (const a of args) {
+        if (a instanceof Cell) {
+          for (const x of a.data) {
+            if (!(x instanceof Mat)) throw new MatlabError('char: cell elements must be character arrays or numbers');
+            addRows(x);
+          }
+        } else if (a instanceof Mat) addRows(a);
+        else throw new MatlabError(`char: cannot convert ${valueClassName(a)} to char`);
+      }
+      return [charMatrix(lines)];
     },
   });
 
   reg.set('disp', {
     fn: (args, _n, ctx) => {
       const a = args[0];
+      if ((a instanceof Mat || a instanceof Cell) && a.isEmpty) return []; // disp([]) prints nothing
       ctx.interp.print((a instanceof Mat && a.isChar && a.rows <= 1 ? a.toJSString() : formatValue(a, ctx.interp.displayFormat)) + '\n');
       return [];
     },
@@ -208,6 +267,7 @@ export function registerSystem(reg) {
       const a = args[0];
       if (!(a instanceof Mat)) throw new MatlabError('mat2str: input must be numeric, logical or char');
       const n = args.length >= 2 ? Math.round(args[1].toScalarNumber()) : 15;
+      if (!(n >= 1 && n <= 100)) throw new MatlabError('mat2str: precision must be a positive integer (at most 100)');
       return [Mat.fromString(mat2strValue(a, n))];
     },
   });
@@ -250,22 +310,29 @@ export function registerSystem(reg) {
   });
 
   reg.set('who', {
-    fn: (_args, _n, ctx) => {
-      const names = [...ctx.scope.names()].filter(n => n !== 'ans');
-      ctx.interp.print(names.length ? 'Your variables are:\n\n' + names.join('  ') + '\n' : 'No variables in the current workspace.\n');
+    // who prints the variable names; w = who returns them as a sorted
+    // cell column.
+    fn: (_args, nargout, ctx) => {
+      const names = [...ctx.scope.names()].sort();
+      if (nargout >= 1) return [new Cell(names.length, 1, names.map(n => Mat.fromString(n)))];
+      if (names.length) ctx.interp.print('\nYour variables are:\n\n' + names.join('  ') + '  \n\n');
       return [];
     },
   });
   reg.set('whos', {
+    // MATLAB's table layout. Bytes are exact for numeric, char and
+    // logical arrays and MATLAB-like estimates for containers.
     fn: (_args, _n, ctx) => {
-      const names = [...ctx.scope.names()];
-      let text = 'Name         Size       Class\n';
+      const names = [...ctx.scope.names()].sort();
+      if (!names.length) return [];
+      const width = Math.max(4, ...names.map(n => n.length));
+      let text = `  ${'Name'.padEnd(width)}      Size            Bytes  Class     Attributes\n\n`;
       for (const n of names) {
         const v = ctx.scope.get(n);
         const size = v instanceof FunctionHandle ? '1x1' : v.sizeStr();
-        text += `${n.padEnd(12)} ${size.padEnd(10)} ${valueClassName(v)}\n`;
+        text += `  ${n.padEnd(width)}      ${size.padEnd(15)}${String(valueBytes(v)).padStart(6)}  ${valueClassName(v)}\n`;
       }
-      ctx.interp.print(text);
+      ctx.interp.print(text + '\n');
       return [];
     },
   });
@@ -354,9 +421,20 @@ export function registerSystem(reg) {
   });
   reg.set('str2double', {
     fn: (args) => {
-      const s = args[0].toJSString();
-      const v = parseFloat(s);
-      return [Mat.scalar(Number.isNaN(v) ? NaN : v)];
+      const a = args[0];
+      if (a instanceof Cell) {
+        const re = new Float64Array(a.numel);
+        let im = null;
+        a.data.forEach((x, k) => {
+          const [r, i] = x instanceof Mat && x.isChar && x.rows <= 1 ? parseNumberText(x.toJSString()) : [NaN, 0];
+          re[k] = r;
+          if (i !== 0) { if (!im) im = new Float64Array(a.numel); im[k] = i; }
+        });
+        return [new Mat(a.rows, a.cols, re, im)];
+      }
+      if (!(a instanceof Mat) || !a.isChar) return [Mat.scalar(NaN)];
+      const [r, i] = parseNumberText(a.toJSString());
+      return [i !== 0 ? Mat.complexScalar(r, i) : Mat.scalar(r)];
     },
   });
   reg.set('str2num', {

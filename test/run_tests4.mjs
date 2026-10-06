@@ -151,7 +151,7 @@ const isLogical = (interp, name) => interp.workspace.get(name).isLogical;
   check('function file called with args', fmtVar(interp, 'r'), 9);
   check('handle to local subfunction', fmtVar(interp, 'v'), 40);
   check('exist() sees function files', fmtVar(interp, 'e'), 2);
-  checkThrows('subfunctions are private to their file', () => run('helper(2)'), /Undefined/);
+  checkThrows('subfunctions are private to their file', () => run('helper(2)'), /^Unrecognized function or variable 'helper'\.$/);
   run('setq;');
   check('script file by bare name', fmtVar(interp, 'q'), 42);
   checkThrows('script file rejects arguments', () => run('setq(1)'), /script/);
@@ -338,6 +338,41 @@ const isLogical = (interp, name) => interp.workspace.get(name).isLogical;
   check('fillmissing', [v('f1').re, v('f2').re, v('f3').re, v('f4').re, v('f5').re, v('f6').re, v('f7').re, v('ft').re, v('f8').re],
     [[1, 2, 3], [NaN, 2, 2, 4, 4], [2, 2, 4, 4, NaN], [2, 2, 4, 4, 4], [1, 2, 3, 4, 5], [1, 7, 8, 4], [1, 2, 3, 4], [0, 1, 1, 0], [1, 0, 0, 4]]);
   checkThrows('fillmissing unknown method', () => run("fillmissing([1 NaN], 'movmean')"), /unsupported method/);
+}
+
+// ---- robustness-sweep fixes (test/run_tests12.mjs found these) ----
+{
+  const { interp, run } = makeInterp();
+  const v = (name) => fmtVar(interp, name);
+  const sz = (name) => { const x = interp.workspace.get(name); return [x.rows, x.cols]; };
+  // Unexpected argument types and missing arguments raise MATLAB's errors.
+  checkThrows('sin of a cell', () => run('sin({1})'), /^Undefined function 'sin' for input arguments of type 'cell'\.$/);
+  checkThrows('mean of a function handle', () => run('mean(@sin)'), /^Undefined function 'mean' for input arguments of type 'function_handle'\.$/);
+  checkThrows('missing argument', () => run('circshift(1:3)'), /^Not enough input arguments\.$/);
+  checkThrows('no arguments', () => run('disp()'), /^Not enough input arguments\.$/);
+  checkThrows('magic(NaN)', () => run('magic(NaN)'), /finite/);
+  checkThrows('parula(Inf)', () => run('parula(Inf)'), /finite/);
+  // Empty matrices in decompositions, as MATLAB.
+  run('e0 = eig([]); [L0, U0] = lu([]); [Q0, R0] = qr(zeros(2, 0)); s0 = svd(zeros(1, 0)); p0 = pinv(zeros(1, 0)); x0 = expm([]); c0 = cov([]); r0 = corrcoef([]); x1 = expm(NaN);');
+  check('empty decompositions', [sz('e0'), sz('L0'), sz('U0'), sz('Q0'), sz('R0'), sz('s0'), sz('p0'), sz('x0'), v('c0'), v('r0'), v('x1')],
+    [[0, 1], [0, 0], [0, 0], [2, 2], [2, 0], [0, 1], [0, 1], [0, 0], NaN, NaN, NaN]);
+  // svd: full-size U and V (orthonormal even for zero singular values), and 'econ'.
+  run("A = [1 2; 3 4; 5 6]; [U, S, V] = svd(A); f1 = norm(U*S*V' - A) < 1e-12; f2 = norm(U'*U - eye(3)) < 1e-12; [Ue, Se, Ve] = svd(A, 'econ'); [Uz, Sz, Vz] = svd(ones(2)); f3 = norm(Uz'*Uz - eye(2)) < 1e-12;");
+  check('svd sizes and orthogonality', [sz('U'), sz('S'), sz('V'), v('f1'), v('f2'), sz('Ue'), sz('Se'), sz('Ve'), v('f3')], [[3, 3], [3, 2], [2, 2], 1, 1, [3, 2], [2, 2], [2, 2], 1]);
+  // eig of a nonsymmetric matrix (Hessenberg QR): MATLAB's values and order.
+  run('ev = eig([1 2; 3 4]); em = eig(magic(4)); rt = roots(reshape(magic(4), 1, [])); r3 = roots([1 -6 11 -6]);');
+  checkClose('eig nonsymmetric', [...v('ev').re, ...v('em').re.slice(0, 3)], [-0.3722813232690143, 5.372281323269014, 34, 8.94427190999916, -8.94427190999916], 1e-12);
+  check('roots of a degree-15 polynomial converges', sz('rt'), [15, 1]);
+  checkClose('roots order', v('r3').re, [3, 2, 1], 1e-12);
+  // fft: any length in O(n log n); real input gives a conjugate-symmetric
+  // transform, so ifft(fft(x)) is real; ifft(X, 'symmetric').
+  const t0 = Date.now();
+  run('big = fft2(magic(4), 1000, 1000); y = ifft(fft([1 2 3])); w = ifft([1 1i 3], \'symmetric\'); z = fft(1:5);');
+  check('fft2 of a 1000x1000 grid is fast', Date.now() - t0 < 5000, true);
+  check('ifft(fft(x)) is real', v('y').im, null);
+  checkClose('ifft(fft(x))', v('y').re, [1, 2, 3], 1e-14);
+  check("ifft 'symmetric' is real", v('w').im, null);
+  check('fft of real input is conjugate symmetric', [v('z').re[1] === v('z').re[4], v('z').im[1] === -v('z').im[4], v('z').im[0]], [true, true, 0]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

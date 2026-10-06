@@ -2,7 +2,7 @@
 // promotes to a complex result (sqrt(-1), log(-1), asin(2), ...), we do
 // the same by implementing these generically over the complex domain.
 
-import { Mat, MatlabError } from '../core/values.js';
+import { Mat, MatlabError, argCountError } from '../core/values.js';
 import * as C from '../core/cmath.js';
 
 // fn works over the complex domain; realFn, when given, handles real
@@ -14,7 +14,7 @@ function unary(fn, realFn = null) {
     return fn(r, i);
   } : fn;
   return (args) => {
-    if (args.length !== 1) throw new MatlabError('Expected exactly 1 argument');
+    if (args.length !== 1) throw argCountError(args.length, 1);
     return [Mat.mapElementwise(args[0], f)];
   };
 }
@@ -22,13 +22,13 @@ const inUnit = (fn) => (r) => (!(Math.abs(r) > 1) ? fn(r) : undefined); // |r| <
 const nonNegative = (fn) => (r) => (!(r < 0) ? fn(r) : undefined); // r >= 0, or NaN
 function unaryRealOut(fn) {
   return (args) => {
-    if (args.length !== 1) throw new MatlabError('Expected exactly 1 argument');
+    if (args.length !== 1) throw argCountError(args.length, 1);
     return [Mat.mapElementwise(args[0], (r, i) => [fn(r, i), 0])];
   };
 }
 function binaryReal(fn) {
   return (args) => {
-    if (args.length !== 2) throw new MatlabError('Expected exactly 2 arguments');
+    if (args.length !== 2) throw argCountError(args.length, 2);
     return [Mat.broadcastBinary(args[0], args[1], (ar, _ai, br, _bi) => [fn(ar, br), 0])];
   };
 }
@@ -80,7 +80,27 @@ export function registerElementwise(reg) {
   reg.set('exp', { fn: unary(C.cexp) });
   reg.set('log', { fn: unary(C.clog) });
   reg.set('log10', { fn: unary((r, i) => { const [lr, li] = C.clog(r, i); return [lr / Math.LN10, li / Math.LN10]; }, nonNegative(Math.log10)) });
-  reg.set('log2', { fn: unary((r, i) => { const [lr, li] = C.clog(r, i); return [lr / Math.LN2, li / Math.LN2]; }, nonNegative(Math.log2)) });
+  const log2Values = unary((r, i) => { const [lr, li] = C.clog(r, i); return [lr / Math.LN2, li / Math.LN2]; }, nonNegative(Math.log2));
+  // log2(X) | [F, E] = log2(X): X = F.*2.^E with 0.5 <= abs(F) < 1 (F = X,
+  // E = 0 for 0, Inf and NaN), from the real part as MATLAB does.
+  reg.set('log2', {
+    fn: (args, nargout) => {
+      if (nargout < 2) return log2Values(args);
+      if (args.length !== 1) throw argCountError(args.length, 1);
+      const x = args[0];
+      const F = new Mat(x.rows, x.cols, new Float64Array(x.numel)), E = new Mat(x.rows, x.cols, new Float64Array(x.numel));
+      for (let k = 0; k < x.numel; k++) {
+        const v = x.re[k];
+        if (v === 0 || !Number.isFinite(v)) { F.re[k] = v; continue; }
+        let e = Math.floor(Math.log2(Math.abs(v))) + 1;
+        let f = v / 2 ** e;
+        // Correct for rounding in log2 near powers of two.
+        if (Math.abs(f) >= 1) { f /= 2; e++; } else if (Math.abs(f) < 0.5) { f *= 2; e--; }
+        F.re[k] = f; E.re[k] = e;
+      }
+      return [F, E];
+    },
+  });
   reg.set('sqrt', { fn: unary(C.csqrt) });
   reg.set('abs', { fn: unaryRealOut(C.cabs) });
   reg.set('angle', { fn: unaryRealOut(C.cangle) });

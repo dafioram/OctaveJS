@@ -1,0 +1,34 @@
+>> c = {1, 'two'; [1 2 3], {4}}
+c =
+  2x2 cell array
+
+    {[1]}        {'two'}
+    {[1 2 3]}    {1x1 cell}
+>> s.name = 'Ada';
+>> s.age = 36;
+>> s.scores = [90 85];
+>> s
+s =
+  struct with fields:
+
+      name: 'Ada'
+       age: 36
+    scores: [90 85]
+>> t = struct('a', {1, 2})
+t =
+  1x2 struct array with fields:
+
+    a
+>> f = @(x) x.^2 + 1
+f =
+  function_handle with value:
+
+    @(x)x.^2 + 1
+>> g = @sin
+g =
+  function_handle with value:
+
+    @sin
+>> e = struct()
+e =
+  struct with no fields.

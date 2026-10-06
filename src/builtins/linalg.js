@@ -10,6 +10,7 @@
 import * as math from 'mathjs';
 import { Mat, Cell, StructArray, MatlabError, shape2D } from '../core/values.js';
 import { _registerLinalgHooks, transposeContainer } from '../core/interpreter.js';
+import { finiteScalarArg } from './numutil.js';
 
 function toRowMajor(mat) {
   const rows = [];
@@ -85,9 +86,55 @@ export function computeRank(mat) {
 // working copy of A until they're numerically orthogonal; singular values
 // are the resulting column norms, left singular vectors are the
 // normalized columns, right singular vectors accumulate in V.
-export function computeSVD(mat) {
-  if (mat.isComplex) throw new MatlabError('svd() of a complex matrix is not supported in this app');
+// Extends orthonormal vectors (arrays of length n) to `count` orthonormal
+// vectors by Gram-Schmidt (twice, for accuracy) on the standard basis.
+function completeBasis(vectors, n, count) {
+  const basis = vectors.map(v => Array.from(v));
+  for (let j = 0; j < n && basis.length < count; j++) {
+    let v = Array.from({ length: n }, (_, i) => (i === j ? 1 : 0));
+    for (let pass = 0; pass < 2; pass++) {
+      for (const b of basis) {
+        const d = b.reduce((acc, bi, i) => acc + bi * v[i], 0);
+        v = v.map((vi, i) => vi - d * b[i]);
+      }
+    }
+    const len = Math.hypot(...v);
+    if (len > 1e-6) basis.push(v.map(x => x / len));
+  }
+  return basis;
+}
+
+function identity(n) {
+  const I = Mat.zeros(n, n);
+  for (let k = 0; k < n; k++) I.re[k * n + k] = 1;
+  return I;
+}
+
+// Singular values of any matrix. A complex A = B + iC has the singular
+// values of the real [B -C; C B], each appearing twice.
+export function singularValues(mat) {
+  if (!mat.isComplex) return computeSVD(mat).singularValues;
   const m = mat.rows, n = mat.cols;
+  const E = Mat.zeros(2 * m, 2 * n);
+  for (let c = 0; c < n; c++) for (let r = 0; r < m; r++) {
+    const re = mat.re[c * m + r], im = mat.im[c * m + r];
+    E.set2(r, c, re); E.set2(r + m, c + n, re);
+    E.set2(r + m, c, im); E.set2(r, c + n, -im);
+  }
+  return computeSVD(E).singularValues.filter((_, k) => k % 2 === 0);
+}
+
+// One-sided Jacobi SVD. U and V are full square orthonormal matrices
+// (columns for zero singular values completed to an orthonormal basis) and
+// S is m-by-n, as MATLAB's [U, S, V] = svd(A); with `econ`, MATLAB's
+// economy size (U m-by-k, S k-by-k, V n-by-k for k = min(m, n)).
+export function computeSVD(mat, econ = false) {
+  if (mat.isComplex) throw new MatlabError('[U, S, V] = svd(A) of a complex matrix is not supported in this app (svd(A), norm and cond are)');
+  const m = mat.rows, n = mat.cols;
+  if (m === 0 || n === 0) {
+    return econ ? { U: Mat.zeros(m, 0), S: Mat.zeros(0, 0), V: Mat.zeros(n, 0), singularValues: [] }
+      : { U: identity(m), S: Mat.zeros(m, n), V: identity(n), singularValues: [] };
+  }
   const transposed = m < n;
   let rows = transposed ? n : m, cols = transposed ? m : n;
   // work in column-major flat arrays for speed
@@ -148,12 +195,343 @@ export function computeSVD(mat) {
     for (let r = 0; r < cols; r++) Vsorted[dstCol * cols + r] = V[srcCol * cols + r];
   });
 
-  let Umat = new Mat(rows, cols, Usorted);
+  // Columns of U for (numerically) zero singular values are not
+  // meaningful; replace them, and extend U to a square basis.
+  const tol = Math.max(rows, cols) * Number.EPSILON * (sSorted[0] || 0);
+  const kept = [];
+  for (let k = 0; k < cols && sSorted[k] > tol; k++) kept.push(Usorted.subarray(k * rows, (k + 1) * rows));
+  const full = completeBasis(kept, rows, econ ? cols : rows);
+  const Ufull = Mat.zeros(rows, full.length);
+  full.forEach((v, c) => Ufull.re.set(v, c * rows));
+  let Umat = Ufull;
   let Vmat = new Mat(cols, cols, Vsorted);
   if (transposed) { const tmp = Umat; Umat = Vmat; Vmat = tmp; }
-  const Smat = Mat.zeros(transposed ? n : m, transposed ? m : n);
-  for (let k = 0; k < sSorted.length; k++) Smat.set2(k, k, sSorted[k]);
+  const k = sSorted.length;
+  const Smat = econ ? Mat.zeros(k, k) : Mat.zeros(m, n);
+  for (let i = 0; i < k; i++) Smat.set2(i, i, sSorted[i]);
   return { U: Umat, S: Smat, V: Vmat, singularValues: sSorted };
+}
+
+// ---------------- eigenvalues of a real general matrix ----------------
+// Balancing (Parlett-Reinsch, as LAPACK's dgebal), reduction to upper
+// Hessenberg form by Householder reflections and the Francis double-shift
+// QR iteration, with back-substitution for the eigenvectors: EISPACK's
+// orthes/hqr2 as ported in JAMA. Used for nonsymmetric matrices, where
+// math.js's eigs can fail to converge (e.g. on the companion matrices built
+// by roots) and starts its eigenvector iteration from random vectors.
+// Returns the eigenvalues { re, im } and, with `vectors`, the eigenvectors
+// as { Vre, Vim } (column-major n-by-n), each of unit 2-norm with its
+// largest component real, as LAPACK's dgeev normalizes them.
+function realEigen(a, vectors = false) {
+  const nn = a.rows;
+  const H = Array.from({ length: nn }, (_, i) => Array.from({ length: nn }, (_, j) => a.re[j * nn + i]));
+  // balance: H = D^-1 * A * D
+  const scale = new Float64Array(nn).fill(1);
+  for (let done = false; !done;) {
+    done = true;
+    for (let i = 0; i < nn; i++) {
+      let c = 0, r = 0;
+      for (let j = 0; j < nn; j++) if (j !== i) { c += Math.abs(H[j][i]); r += Math.abs(H[i][j]); }
+      if (c === 0 || r === 0) continue;
+      const s = c + r;
+      let f = 1, g = r / 2;
+      while (c < g) { f *= 2; c *= 4; }
+      g = r * 2;
+      while (c > g) { f /= 2; c /= 4; }
+      if ((c + r) / f < 0.95 * s) {
+        done = false;
+        scale[i] *= f;
+        for (let j = 0; j < nn; j++) { H[i][j] /= f; H[j][i] *= f; }
+      }
+    }
+  }
+  // orthes: Householder reduction to Hessenberg form
+  const ort = new Float64Array(nn);
+  for (let m = 1; m < nn - 1; m++) {
+    let sc = 0;
+    for (let i = m; i < nn; i++) sc += Math.abs(H[i][m - 1]);
+    if (sc === 0) continue;
+    let h = 0;
+    for (let i = nn - 1; i >= m; i--) { ort[i] = H[i][m - 1] / sc; h += ort[i] * ort[i]; }
+    let g = Math.sqrt(h);
+    if (ort[m] > 0) g = -g;
+    h -= ort[m] * g;
+    ort[m] -= g;
+    for (let j = m; j < nn; j++) {
+      let f = 0;
+      for (let i = nn - 1; i >= m; i--) f += ort[i] * H[i][j];
+      f /= h;
+      for (let i = m; i < nn; i++) H[i][j] -= f * ort[i];
+    }
+    for (let i = 0; i < nn; i++) {
+      let f = 0;
+      for (let j = nn - 1; j >= m; j--) f += ort[j] * H[i][j];
+      f /= h;
+      for (let j = m; j < nn; j++) H[i][j] -= f * ort[j];
+    }
+    ort[m] *= sc;
+    H[m][m - 1] = sc * g;
+  }
+  // accumulate the transformations (ortran)
+  const V = Array.from({ length: nn }, (_, i) => Array.from({ length: nn }, (_, j) => (i === j ? 1 : 0)));
+  for (let m = nn - 2; m >= 1; m--) {
+    if (H[m][m - 1] === 0) continue;
+    for (let i = m + 1; i < nn; i++) ort[i] = H[i][m - 1];
+    for (let j = m; j < nn; j++) {
+      let g = 0;
+      for (let i = m; i < nn; i++) g += ort[i] * V[i][j];
+      g = (g / ort[m]) / H[m][m - 1];
+      for (let i = m; i < nn; i++) V[i][j] += g * ort[i];
+    }
+  }
+  // hqr2: shifted QR iteration on the Hessenberg matrix
+  const d = new Float64Array(nn), e = new Float64Array(nn);
+  const eps = Number.EPSILON;
+  let n = nn - 1, exshift = 0, iter = 0, totalIter = 0;
+  let p = 0, q = 0, r = 0, s = 0, z = 0, t, w, x, y;
+  let norm = 0;
+  for (let i = 0; i < nn; i++) for (let j = Math.max(i - 1, 0); j < nn; j++) norm += Math.abs(H[i][j]);
+  while (n >= 0) {
+    let l = n;
+    while (l > 0) {
+      s = Math.abs(H[l - 1][l - 1]) + Math.abs(H[l][l]);
+      if (s === 0) s = norm;
+      if (Math.abs(H[l][l - 1]) < eps * s) break;
+      l--;
+    }
+    if (l === n) { // one root
+      H[n][n] += exshift;
+      d[n] = H[n][n]; e[n] = 0;
+      n--; iter = 0;
+    } else if (l === n - 1) { // two roots
+      w = H[n][n - 1] * H[n - 1][n];
+      p = (H[n - 1][n - 1] - H[n][n]) / 2;
+      q = p * p + w;
+      z = Math.sqrt(Math.abs(q));
+      H[n][n] += exshift;
+      H[n - 1][n - 1] += exshift;
+      x = H[n][n];
+      if (q >= 0) { // real pair
+        z = p >= 0 ? p + z : p - z;
+        d[n - 1] = x + z;
+        d[n] = z !== 0 ? x - w / z : d[n - 1];
+        e[n - 1] = 0; e[n] = 0;
+        x = H[n][n - 1];
+        s = Math.abs(x) + Math.abs(z);
+        p = x / s; q = z / s;
+        r = Math.sqrt(p * p + q * q);
+        p /= r; q /= r;
+        for (let j = n - 1; j < nn; j++) {
+          z = H[n - 1][j];
+          H[n - 1][j] = q * z + p * H[n][j];
+          H[n][j] = q * H[n][j] - p * z;
+        }
+        for (let i = 0; i <= n; i++) {
+          z = H[i][n - 1];
+          H[i][n - 1] = q * z + p * H[i][n];
+          H[i][n] = q * H[i][n] - p * z;
+        }
+        for (let i = 0; i < nn; i++) {
+          z = V[i][n - 1];
+          V[i][n - 1] = q * z + p * V[i][n];
+          V[i][n] = q * V[i][n] - p * z;
+        }
+      } else { // complex pair
+        d[n - 1] = x + p; d[n] = x + p;
+        e[n - 1] = z; e[n] = -z;
+      }
+      n -= 2; iter = 0;
+    } else { // no convergence yet
+      x = H[n][n]; y = 0; w = 0;
+      if (l < n) { y = H[n - 1][n - 1]; w = H[n][n - 1] * H[n - 1][n]; }
+      if (iter === 10) { // Wilkinson's ad hoc shift
+        exshift += x;
+        for (let i = 0; i <= n; i++) H[i][i] -= x;
+        s = Math.abs(H[n][n - 1]) + Math.abs(H[n - 1][n - 2]);
+        x = y = 0.75 * s;
+        w = -0.4375 * s * s;
+      }
+      if (iter === 30) { // MATLAB's ad hoc shift
+        s = (y - x) / 2;
+        s = s * s + w;
+        if (s > 0) {
+          s = Math.sqrt(s);
+          if (y < x) s = -s;
+          s = x - w / ((y - x) / 2 + s);
+          for (let i = 0; i <= n; i++) H[i][i] -= s;
+          exshift += s;
+          x = y = w = 0.964;
+        }
+      }
+      iter++;
+      if (++totalIter > 100 * nn) throw new MatlabError('eig: the QR algorithm failed to converge');
+      let m = n - 2;
+      while (m >= l) {
+        z = H[m][m];
+        r = x - z; s = y - z;
+        p = (r * s - w) / H[m + 1][m] + H[m][m + 1];
+        q = H[m + 1][m + 1] - z - r - s;
+        r = H[m + 2][m + 1];
+        s = Math.abs(p) + Math.abs(q) + Math.abs(r);
+        p /= s; q /= s; r /= s;
+        if (m === l) break;
+        if (Math.abs(H[m][m - 1]) * (Math.abs(q) + Math.abs(r)) < eps * (Math.abs(p) * (Math.abs(H[m - 1][m - 1]) + Math.abs(z) + Math.abs(H[m + 1][m + 1])))) break;
+        m--;
+      }
+      for (let i = m + 2; i <= n; i++) {
+        H[i][i - 2] = 0;
+        if (i > m + 2) H[i][i - 3] = 0;
+      }
+      for (let k = m; k <= n - 1; k++) {
+        const notlast = k !== n - 1;
+        if (k !== m) {
+          p = H[k][k - 1]; q = H[k + 1][k - 1]; r = notlast ? H[k + 2][k - 1] : 0;
+          x = Math.abs(p) + Math.abs(q) + Math.abs(r);
+          if (x === 0) continue;
+          p /= x; q /= x; r /= x;
+        }
+        s = Math.sqrt(p * p + q * q + r * r);
+        if (p < 0) s = -s;
+        if (s === 0) continue;
+        if (k !== m) H[k][k - 1] = -s * x;
+        else if (l !== m) H[k][k - 1] = -H[k][k - 1];
+        p += s; x = p / s; y = q / s; z = r / s; q /= p; r /= p;
+        for (let j = k; j < nn; j++) {
+          p = H[k][j] + q * H[k + 1][j];
+          if (notlast) { p += r * H[k + 2][j]; H[k + 2][j] -= p * z; }
+          H[k][j] -= p * x; H[k + 1][j] -= p * y;
+        }
+        for (let i = 0; i <= Math.min(n, k + 3); i++) {
+          p = x * H[i][k] + y * H[i][k + 1];
+          if (notlast) { p += z * H[i][k + 2]; H[i][k + 2] -= p * r; }
+          H[i][k] -= p; H[i][k + 1] -= p * q;
+        }
+        for (let i = 0; i < nn; i++) {
+          p = x * V[i][k] + y * V[i][k + 1];
+          if (notlast) { p += z * V[i][k + 2]; V[i][k + 2] -= p * r; }
+          V[i][k] -= p; V[i][k + 1] -= p * q;
+        }
+      }
+    }
+  }
+  if (!vectors) return { re: d, im: e };
+
+  // Back-substitute to find the vectors of the upper triangular form.
+  const cdiv = (xr, xi, yr, yi) => {
+    if (Math.abs(yr) > Math.abs(yi)) {
+      const rr = yi / yr, dd = yr + rr * yi;
+      return [(xr + rr * xi) / dd, (xi - rr * xr) / dd];
+    }
+    const rr = yr / yi, dd = yi + rr * yr;
+    return [(rr * xr + xi) / dd, (rr * xi - xr) / dd];
+  };
+  if (norm !== 0) {
+    for (n = nn - 1; n >= 0; n--) {
+      p = d[n]; q = e[n];
+      if (q === 0) { // real vector
+        let l = n;
+        H[n][n] = 1;
+        for (let i = n - 1; i >= 0; i--) {
+          w = H[i][i] - p;
+          r = 0;
+          for (let j = l; j <= n; j++) r += H[i][j] * H[j][n];
+          if (e[i] < 0) { z = w; s = r; continue; }
+          l = i;
+          if (e[i] === 0) H[i][n] = w !== 0 ? -r / w : -r / (eps * norm);
+          else {
+            x = H[i][i + 1]; y = H[i + 1][i];
+            q = (d[i] - p) * (d[i] - p) + e[i] * e[i];
+            t = (x * s - z * r) / q;
+            H[i][n] = t;
+            H[i + 1][n] = Math.abs(x) > Math.abs(z) ? (-r - w * t) / x : (-s - y * t) / z;
+          }
+          t = Math.abs(H[i][n]);
+          if ((eps * t) * t > 1) for (let j = i; j <= n; j++) H[j][n] /= t;
+        }
+      } else if (q < 0) { // complex vector (columns n-1 and n)
+        let l = n - 1;
+        if (Math.abs(H[n][n - 1]) > Math.abs(H[n - 1][n])) {
+          H[n - 1][n - 1] = q / H[n][n - 1];
+          H[n - 1][n] = -(H[n][n] - p) / H[n][n - 1];
+        } else {
+          [H[n - 1][n - 1], H[n - 1][n]] = cdiv(0, -H[n - 1][n], H[n - 1][n - 1] - p, q);
+        }
+        H[n][n - 1] = 0; H[n][n] = 1;
+        for (let i = n - 2; i >= 0; i--) {
+          let ra = 0, sa = 0;
+          for (let j = l; j <= n; j++) { ra += H[i][j] * H[j][n - 1]; sa += H[i][j] * H[j][n]; }
+          w = H[i][i] - p;
+          if (e[i] < 0) { z = w; r = ra; s = sa; continue; }
+          l = i;
+          if (e[i] === 0) {
+            [H[i][n - 1], H[i][n]] = cdiv(-ra, -sa, w, q);
+          } else {
+            x = H[i][i + 1]; y = H[i + 1][i];
+            let vr = (d[i] - p) * (d[i] - p) + e[i] * e[i] - q * q;
+            const vi = (d[i] - p) * 2 * q;
+            if (vr === 0 && vi === 0) vr = eps * norm * (Math.abs(w) + Math.abs(q) + Math.abs(x) + Math.abs(y) + Math.abs(z));
+            [H[i][n - 1], H[i][n]] = cdiv(x * r - z * ra + q * sa, x * s - z * sa - q * ra, vr, vi);
+            if (Math.abs(x) > Math.abs(z) + Math.abs(q)) {
+              H[i + 1][n - 1] = (-ra - w * H[i][n - 1] + q * H[i][n]) / x;
+              H[i + 1][n] = (-sa - w * H[i][n] - q * H[i][n - 1]) / x;
+            } else {
+              [H[i + 1][n - 1], H[i + 1][n]] = cdiv(-r - y * H[i][n - 1], -s - y * H[i][n], z, q);
+            }
+          }
+          t = Math.max(Math.abs(H[i][n - 1]), Math.abs(H[i][n]));
+          if ((eps * t) * t > 1) for (let j = i; j <= n; j++) { H[j][n - 1] /= t; H[j][n] /= t; }
+        }
+      }
+    }
+    // back-transform to the eigenvectors of the balanced matrix
+    for (let j = nn - 1; j >= 0; j--) {
+      for (let i = 0; i < nn; i++) {
+        z = 0;
+        for (let k = 0; k <= j; k++) z += V[i][k] * H[k][j];
+        V[i][j] = z;
+      }
+    }
+  }
+  // Undo the balancing, then normalize: unit 2-norm, largest component real.
+  const Vre = new Float64Array(nn * nn), Vim = new Float64Array(nn * nn);
+  for (let j = 0; j < nn; j++) {
+    if (e[j] === 0) {
+      for (let i = 0; i < nn; i++) Vre[j * nn + i] = scale[i] * V[i][j];
+    } else if (e[j] > 0) { // pair: v = V(:, j) +/- i*V(:, j+1)
+      for (let i = 0; i < nn; i++) {
+        Vre[j * nn + i] = Vre[(j + 1) * nn + i] = scale[i] * V[i][j];
+        Vim[j * nn + i] = scale[i] * V[i][j + 1];
+        Vim[(j + 1) * nn + i] = -scale[i] * V[i][j + 1];
+      }
+    }
+  }
+  for (let j = 0; j < nn; j++) {
+    let len = 0, big = -1, br = 1, bi = 0;
+    for (let i = 0; i < nn; i++) {
+      const vr = Vre[j * nn + i], vi = Vim[j * nn + i], m2 = vr * vr + vi * vi;
+      len += m2;
+      if (m2 > big) { big = m2; br = vr; bi = vi; }
+    }
+    len = Math.sqrt(len);
+    if (len === 0) continue;
+    // Divide by len * (largest component's phase) when complex.
+    let pr = 1, pi = 0;
+    if (e[j] !== 0 && big > 0) { const bm = Math.sqrt(big); pr = br / bm; pi = -bi / bm; }
+    for (let i = 0; i < nn; i++) {
+      const vr = Vre[j * nn + i], vi = Vim[j * nn + i];
+      Vre[j * nn + i] = (vr * pr - vi * pi) / len;
+      Vim[j * nn + i] = (vr * pi + vi * pr) / len;
+    }
+  }
+  return { re: d, im: e, Vre, Vim };
+}
+const realEigenvalues = (a) => realEigen(a, false);
+
+function isSymmetric(a) {
+  if (a.isComplex) return false;
+  const n = a.rows;
+  for (let c = 0; c < n; c++) for (let r = c + 1; r < n; r++) if (a.re[c * n + r] !== a.re[r * n + c]) return false;
+  return true;
 }
 
 // ---------------- LU factorization (real, square) ----------------
@@ -290,7 +668,7 @@ export function registerLinalg(reg) {
   reg.set('diag', {
     fn: (args) => {
       const a = args[0];
-      const k = args.length >= 2 ? Math.round(args[1].toScalarNumber()) : 0;
+      const k = args.length >= 2 ? Math.round(finiteScalarArg(args[1], 'diag', 'K')) : 0;
       if (a.isVector && a.numel > 1) {
         const n = a.numel + Math.abs(k);
         const out = Mat.zeros(n, n);
@@ -344,15 +722,13 @@ export function registerLinalg(reg) {
     fn: (args) => {
       const a = args[0]; requireSquare(a, 'trace');
       let re = 0, im = 0;
-      for (let k = 0; k < a.rows; k++) { re += a.get2(k, k) && a.re[k * a.rows + k]; }
-      re = 0; im = 0;
       for (let k = 0; k < a.rows; k++) { re += a.re[k * a.rows + k]; if (a.isComplex) im += a.im[k * a.rows + k]; }
       return [im !== 0 ? Mat.complexScalar(re, im) : Mat.scalar(re)];
     },
   });
   reg.set('rank', { fn: (args) => [Mat.scalar(computeRank(args[0]))] });
   reg.set('inv', { fn: (args, _n, ctx) => [ctx.interp.reportWarnings(inverse(args[0]))] });
-  reg.set('pinv', { fn: (args) => [fromRowMajor(math.pinv(toRowMajor(args[0])))] });
+  reg.set('pinv', { fn: (args) => [args[0].isEmpty ? Mat.zeros(args[0].cols, args[0].rows) : fromRowMajor(math.pinv(toRowMajor(args[0])))] });
 
   reg.set('dot', {
     fn: (args) => {
@@ -418,14 +794,25 @@ export function registerLinalg(reg) {
         return [Mat.scalar(mx)];
       }
       // default (p=2): largest singular value
-      const { singularValues } = computeSVD(a);
-      return [Mat.scalar(singularValues[0] || 0)];
+      return [Mat.scalar(singularValues(a)[0] || 0)];
     },
   });
 
   reg.set('eig', {
     fn: (args, nargout) => {
       const a = args[0]; requireSquare(a, 'eig');
+      if (a.isEmpty) return nargout < 2 ? [Mat.zeros(0, 1)] : [Mat.empty(), Mat.empty()];
+      if (!a.isComplex && !isSymmetric(a)) {
+        if (!a.re.every(Number.isFinite)) throw new MatlabError('Input to EIG must not contain NaN or Inf.', 'MATLAB:eig:matrixWithNaNInf');
+        const n = a.rows;
+        const { re, im, Vre, Vim } = realEigen(a, nargout >= 2);
+        const complex = im.some(v => v !== 0);
+        if (nargout < 2) return [new Mat(n, 1, re, complex ? im : null)];
+        const D = Mat.zeros(n, n);
+        if (complex) D.im = new Float64Array(n * n);
+        for (let k = 0; k < n; k++) { D.re[k * n + k] = re[k]; if (complex) D.im[k * n + k] = im[k]; }
+        return [new Mat(n, n, Vre, complex ? Vim : null), D];
+      }
       const result = math.eigs(toRowMajor(a), { eigenvectors: nargout >= 2 });
       const values = result.values;
       if (nargout < 2) {
@@ -456,36 +843,101 @@ export function registerLinalg(reg) {
 
   reg.set('svd', {
     fn: (args, nargout) => {
-      const { U, S, V } = computeSVD(args[0]);
-      if (nargout < 2) return [new Mat(S.rows, 1, (() => { const n = Math.min(S.rows, S.cols); const re = new Float64Array(n); for (let k = 0; k < n; k++) re[k] = S.re[k * S.rows + k]; return re; })())];
+      const a = args[0];
+      let econ = false;
+      if (args.length >= 2) {
+        const opt = args[1];
+        if (opt.isChar && opt.toJSString().toLowerCase() === 'econ') econ = true;
+        else if (!opt.isChar && opt.numel === 1 && opt.re[0] === 0) econ = a.rows > a.cols; // svd(A, 0)
+        else throw new MatlabError("svd: the second argument must be 'econ' or 0");
+      }
+      if (nargout < 2) {
+        const s = singularValues(a);
+        return [new Mat(s.length, 1, Float64Array.from(s))];
+      }
+      const { U, S, V } = computeSVD(a, econ);
       return [U, S, V];
     },
   });
 
+  // Y = lu(A) | [L, U] = lu(A) (L permuted so A = L*U) | [L, U, P] = lu(A)
+  // (P*A = L*U) | [L, U, p] = lu(A, 'vector') (A(p, :) = L*U): Gaussian
+  // elimination with partial pivoting, as LAPACK's getrf, for real or
+  // complex and square or rectangular A.
   reg.set('lu', {
     fn: (args, nargout) => {
-      const a = args[0]; requireSquare(a, 'lu');
-      const { L, U, p } = math.lup(toRowMajor(a));
-      const n = a.rows;
-      const Lmat = fromRowMajor(L.valueOf ? L.valueOf() : L);
-      const Umat = fromRowMajor(U.valueOf ? U.valueOf() : U);
-      const perm = p.valueOf ? p.valueOf() : p;
-      if (nargout >= 3) {
-        const P = Mat.zeros(n, n);
-        perm.forEach((srcRow, dstRow) => { P.set2(dstRow, srcRow, 1); });
-        return [Lmat, Umat, P];
+      const a = args[0];
+      if (!(a instanceof Mat) || a.isChar) throw new MatlabError('lu: input must be numeric');
+      let vector = false;
+      if (args.length >= 2) {
+        const opt = args[1].isChar ? args[1].toJSString().toLowerCase() : '';
+        if (opt !== 'vector' && opt !== 'matrix') throw new MatlabError("lu: the option must be 'vector' or 'matrix'");
+        vector = opt === 'vector';
       }
-      // 2-output form: undo the permutation on L so that A = L*U directly
-      const L2 = Mat.zeros(n, n);
-      perm.forEach((srcRow, dstRow) => {
-        for (let c = 0; c < n; c++) L2.set2(srcRow, c, Lmat.get2(dstRow, c));
-      });
-      return [L2, Umat];
+      const m = a.rows, n = a.cols, k = Math.min(m, n);
+      const re = Float64Array.from(a.re), im = a.isComplex ? Float64Array.from(a.im) : null;
+      const piv = Array.from({ length: m }, (_, i) => i);
+      const at = (r, c) => c * m + r;
+      for (let j = 0; j < k; j++) {
+        let p = j, best = -1;
+        for (let i = j; i < m; i++) {
+          const v = Math.hypot(re[at(i, j)], im ? im[at(i, j)] : 0);
+          if (v > best || (Number.isNaN(v) && best < 0)) { best = v; p = i; }
+        }
+        if (p !== j) {
+          for (let c = 0; c < n; c++) {
+            let t = re[at(j, c)]; re[at(j, c)] = re[at(p, c)]; re[at(p, c)] = t;
+            if (im) { t = im[at(j, c)]; im[at(j, c)] = im[at(p, c)]; im[at(p, c)] = t; }
+          }
+          [piv[j], piv[p]] = [piv[p], piv[j]];
+        }
+        const pr = re[at(j, j)], pi = im ? im[at(j, j)] : 0;
+        if (pr === 0 && pi === 0) continue;
+        const d = pr * pr + pi * pi;
+        for (let i = j + 1; i < m; i++) {
+          const xr = re[at(i, j)], xi = im ? im[at(i, j)] : 0;
+          const lr = (xr * pr + xi * pi) / d, li = (xi * pr - xr * pi) / d; // x / pivot
+          re[at(i, j)] = lr; if (im) im[at(i, j)] = li;
+          if (lr === 0 && li === 0) continue;
+          for (let c = j + 1; c < n; c++) {
+            const ur = re[at(j, c)], ui = im ? im[at(j, c)] : 0;
+            re[at(i, c)] -= lr * ur - li * ui;
+            if (im) im[at(i, c)] -= lr * ui + li * ur;
+          }
+        }
+      }
+      const pick = (rows, cols, f) => {
+        const out = new Mat(rows, cols, new Float64Array(rows * cols), im ? new Float64Array(rows * cols) : null);
+        for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) {
+          const v = f(r, c);
+          if (v === 1) out.re[c * rows + r] = 1;
+          else if (v) { out.re[c * rows + r] = re[at(v[0], v[1])]; if (im) out.im[c * rows + r] = im[at(v[0], v[1])]; }
+        }
+        if (out.im && out.im.every(x => x === 0)) out.im = null;
+        return out;
+      };
+      const U = pick(k, n, (r, c) => (r <= c ? [r, c] : 0));
+      if (nargout <= 1) return [pick(m, n, (r, c) => [r, c])];
+      const L = pick(m, k, (r, c) => (r === c ? 1 : r > c ? [r, c] : 0));
+      if (nargout === 2) {
+        // Row piv[r] of A is row r of L*U, so A = (P'*L)*U.
+        const L2 = new Mat(m, k, new Float64Array(m * k), L.im ? new Float64Array(m * k) : null);
+        for (let c = 0; c < k; c++) for (let r = 0; r < m; r++) {
+          L2.re[c * m + piv[r]] = L.re[c * m + r];
+          if (L.im) L2.im[c * m + piv[r]] = L.im[c * m + r];
+        }
+        return [L2, U];
+      }
+      if (vector) return [L, U, new Mat(1, m, Float64Array.from(piv, x => x + 1))];
+      const P = Mat.zeros(m, m);
+      piv.forEach((src, r) => { P.re[src * m + r] = 1; });
+      return [L, U, P];
     },
   });
 
   reg.set('qr', {
     fn: (args) => {
+      if (args[0].isEmpty) return [identity(args[0].rows), Mat.zeros(args[0].rows, args[0].cols)];
       const { Q, R } = math.qr(toRowMajor(args[0]));
       return [fromRowMajor(Q.valueOf ? Q.valueOf() : Q), fromRowMajor(R.valueOf ? R.valueOf() : R)];
     },
@@ -516,7 +968,7 @@ export function registerLinalg(reg) {
   // column and reassemble. Entries may be math.js Complex values, so the
   // result keeps imaginary parts rather than dropping them.
   function solve(a, b) {
-    if (a.rows !== b.rows) throw new MatlabError(`Matrix dimensions must agree for A\\b (${a.sizeStr()} vs ${b.sizeStr()})`);
+    if (a.rows !== b.rows) throw new MatlabError('Matrix dimensions must agree.', 'MATLAB:dimagree');
     if (a.rows === a.cols && !a.isComplex && !b.isComplex) {
       // Square and real: LU with partial pivoting (NaN and Inf propagate as
       // in MATLAB; a singular matrix gives Inf/NaN and a warning).
@@ -555,7 +1007,12 @@ export function registerLinalg(reg) {
   }
   // ---- matrix functions and decompositions ----
   reg.set('expm', {
-    fn: (args) => { requireSquare(args[0], 'expm'); return [fromRowMajor(math.expm(math.matrix(toRowMajor(args[0]))).valueOf())]; },
+    fn: (args) => {
+      requireSquare(args[0], 'expm');
+      if (args[0].isEmpty) return [Mat.empty()];
+      if (!args[0].re.every(Number.isFinite)) return [new Mat(args[0].rows, args[0].cols, new Float64Array(args[0].numel).fill(NaN))];
+      return [fromRowMajor(math.expm(math.matrix(toRowMajor(args[0]))).valueOf())];
+    },
   });
   // sqrtm: math.js's Denman–Beavers iteration; matrices it can't handle
   // (e.g. negative eigenvalues, whose square root is complex) go through
@@ -563,6 +1020,7 @@ export function registerLinalg(reg) {
   reg.set('sqrtm', {
     fn: (args) => {
       const a = args[0]; requireSquare(a, 'sqrtm');
+      if (a.isEmpty) return [Mat.empty()];
       try {
         const r = fromRowMajor(math.sqrtm(math.matrix(toRowMajor(a))).valueOf());
         if (Array.from(r.re).every(Number.isFinite)) return [r];
@@ -617,7 +1075,7 @@ export function registerLinalg(reg) {
       const a = args[0];
       if (a.isEmpty) return [Mat.scalar(0)];
       if (args.length < 2 || (!args[1].isChar && args[1].toScalarNumber() === 2)) {
-        const s = computeSVD(a).singularValues;
+        const s = singularValues(a);
         const smin = s[s.length - 1];
         return [Mat.scalar(smin === 0 ? Infinity : s[0] / smin)];
       }
@@ -655,22 +1113,9 @@ export function registerLinalg(reg) {
       if (a.isComplex) throw new MatlabError('null: complex matrices are not supported');
       const n = a.cols;
       const { V, r } = rangeAndRank(a);
-      // V's first r columns span the row space; complete them to an
-      // orthonormal basis of R^n and keep the new vectors (the null space).
-      const basis = [];
-      for (let c = 0; c < r; c++) basis.push(Array.from(V.re.subarray(c * n, (c + 1) * n)));
-      const out = [];
-      for (let j = 0; j < n && basis.length < n; j++) {
-        let v = Array.from({ length: n }, (_, i) => (i === j ? 1 : 0));
-        for (let pass = 0; pass < 2; pass++) {
-          for (const b of basis) {
-            const d = b.reduce((acc, bi, i) => acc + bi * v[i], 0);
-            v = v.map((vi, i) => vi - d * b[i]);
-          }
-        }
-        const len = Math.hypot(...v);
-        if (len > 1e-6) { v = v.map(x => x / len); basis.push(v); out.push(v); }
-      }
+      // V's first r columns span the row space; the rest of V completes
+      // them to an orthonormal basis of R^n: the null space.
+      const out = V.cols === n ? Array.from({ length: n - r }, (_, j) => Array.from(V.re.subarray((r + j) * n, (r + j + 1) * n))) : [];
       const N = Mat.zeros(n, out.length);
       out.forEach((v, c) => v.forEach((x, i) => { N.re[c * n + i] = Math.abs(x) < 1e-15 ? 0 : x; }));
       return [N];
