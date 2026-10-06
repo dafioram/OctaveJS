@@ -8,10 +8,10 @@ v =
 >> format short
 >> p = pi
 p =
-   3.1416
+    3.1416
 >> 3 + 4
 ans =
-   7
+     7
 >> ans * 2
 ans =
-   14
+    14

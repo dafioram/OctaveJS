@@ -23,7 +23,7 @@ t =
 f =
   function_handle with value:
 
-    @(x)x.^2 + 1
+    @(x)x.^2+1
 >> g = @sin
 g =
   function_handle with value:

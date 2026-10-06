@@ -3,7 +3,8 @@
 // strjoin, struct, fieldnames, isfield, rmfield, isstruct, getfield,
 // setfield, struct2cell, numfields.
 
-import { Mat, Cell, StructArray, FunctionHandle, MatlabError, valueClassName, shapeArgs } from '../core/values.js';
+import { Mat, Cell, StructArray, FunctionHandle, MatlabError, valueClassName, shapeArgs, selectElements } from '../core/values.js';
+import { textValue } from './format.js';
 
 function isText(v) { return v instanceof Mat && v.isChar; }
 function textOf(v, what) {
@@ -120,7 +121,15 @@ export function registerContainers(reg) {
   reg.set('num2cell', {
     fn: (args) => {
       const a = args[0];
-      if (a instanceof Cell) return [a];
+      if (args.length >= 2) {
+        // num2cell(A, dims): the parts of A spanning dims, one per cell.
+        const dims = Array.from(args[1].re);
+        const byCol = dims.includes(1), byRow = dims.includes(2);
+        if (byCol && byRow) return [new Cell(1, 1, [a])];
+        if (byCol) return [new Cell(1, a.cols, Array.from({ length: a.cols }, (_, c) => selectElements(a, a.rows, 1, Array.from({ length: a.rows }, (_, r) => c * a.rows + r))))];
+        if (byRow) return [new Cell(a.rows, 1, Array.from({ length: a.rows }, (_, r) => selectElements(a, 1, a.cols, Array.from({ length: a.cols }, (_, c) => c * a.rows + r))))];
+      }
+      if (a instanceof Cell) return [new Cell(a.rows, a.cols, a.data.map(x => new Cell(1, 1, [x])))];
       if (a instanceof FunctionHandle) return [new Cell(1, 1, [a])];
       return [new Cell(a.rows, a.cols, Array.from({ length: a.numel }, (_, k) => elementAt(a, k)))];
     },
@@ -150,7 +159,7 @@ export function registerContainers(reg) {
         return [a];
       }
       if (!isText(a)) throw new MatlabError('cellstr: input must be a character array or cell array of character vectors');
-      if (a.isEmpty) return [new Cell(1, 1, [Mat.fromString('')])];
+      if (a.isEmpty) return [new Cell(1, 1, [textValue('')])];
       const strings = [];
       for (let r = 0; r < a.rows; r++) {
         let s = '';
@@ -177,7 +186,7 @@ export function registerContainers(reg) {
       const alt = delims.filter(x => x.length > 0).sort((x, y) => y.length - x.length)
         .map(x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
       const parts = alt ? s.split(new RegExp(collapse ? `(?:${alt})+` : `(?:${alt})`)) : [s];
-      return [new Cell(1, parts.length, parts.map(p => Mat.fromString(p)))];
+      return [new Cell(1, parts.length, parts.map(p => textValue(p)))];
     },
   });
 

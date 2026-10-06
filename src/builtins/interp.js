@@ -5,6 +5,7 @@
 // functions mkpp / unmkpp / ppval, and polyder / polyint.
 
 import { Mat, StructArray, MatlabError } from '../core/values.js';
+import { linearOnParts } from './numutil.js';
 
 const isText = (v) => v instanceof Mat && v.isChar;
 
@@ -442,24 +443,39 @@ export function registerInterp(reg) {
   });
 
   // polyder(p) | polyder(a, b) (derivative of the product) | [q, d] = polyder(b, a) (of the quotient b/a)
+  // polyder(p) | polyder(a, b) (derivative of the product) | [q, d] =
+  // polyder(b, a) (derivative of the quotient b/a). Complex p works part by
+  // part (differentiation is linear).
+  const polyderReal = (args, nargout) => {
+    const vals = args.map((v, i) => realValues(v, i ? 'b' : 'p', 'polyder'));
+    if (vals.length === 1) return [rowOf(stripLeading(derivative(vals[0].length ? vals[0] : [0])))];
+    const [u, v] = vals;
+    if (nargout >= 2) {
+      const q = subtract(conv(derivative(u), v), conv(u, derivative(v)));
+      return [rowOf(stripLeading(q)), rowOf(stripLeading(conv(v, v)))];
+    }
+    return [rowOf(stripLeading(derivative(conv(u, v))))];
+  };
   reg.set('polyder', {
-    fn: (args, nargout) => {
-      const vals = args.map((v, i) => realValues(v, i ? 'b' : 'p', 'polyder'));
-      if (vals.length === 1) return [rowOf(stripLeading(derivative(vals[0].length ? vals[0] : [0])))];
-      const [u, v] = vals;
-      if (nargout >= 2) {
-        const q = subtract(conv(derivative(u), v), conv(u, derivative(v)));
-        return [rowOf(stripLeading(q)), rowOf(stripLeading(conv(v, v)))];
-      }
-      return [rowOf(stripLeading(derivative(conv(u, v))))];
-    },
+    fn: (args, nargout) => (args.length === 1 && args[0] instanceof Mat && args[0].isComplex
+      ? [linearOnParts(args, 0, (a) => polyderReal(a, 1)[0])]
+      : polyderReal(args, nargout)),
   });
   // polyint(p) | polyint(p, k)
   reg.set('polyint', {
     fn: (args) => {
-      const p = realValues(args[0], 'p', 'polyint');
-      const k = args.length >= 2 ? args[1].toScalarNumber() : 0;
-      return [rowOf([...p.map((c, i) => c / (p.length - i)), k])];
+      // Integrate with a zero constant (part by part for complex p, as
+      // integration is linear), then add the constant k.
+      const out = linearOnParts(args.slice(0, 1), 0, (a) => {
+        const p = realValues(a[0], 'p', 'polyint');
+        return rowOf([...p.map((c, i) => c / (p.length - i)), 0]);
+      });
+      if (args.length >= 2) {
+        const k = args[1], last = out.numel - 1;
+        out.re[last] += k.re[0];
+        if (k.isComplex && k.im[0] !== 0) { if (!out.im) out.im = new Float64Array(out.numel); out.im[last] += k.im[0]; }
+      }
+      return [out];
     },
   });
 }

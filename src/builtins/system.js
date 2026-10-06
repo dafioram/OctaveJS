@@ -6,7 +6,7 @@ import { Mat, Cell, FunctionHandle, MatlabError, colonRange, valueClassName, sha
 import { formatValue } from '../core/interpreter.js';
 import { parse } from '../core/parser.js';
 import { HELP_DATA } from './help-data.js';
-import { doSprintf, flattenArgsForPrintf, num2strDefault, mat2strValue, charMatrix } from './format.js';
+import { doSprintf, flattenArgsForPrintf, num2strDefault, mat2strValue, charMatrix, trimmedRows } from './format.js';
 
 // Sizes for zeros/ones/rand/...: trailing class names ('double',
 // 'like', ...) are ignored; no size arguments gives a scalar.
@@ -45,6 +45,10 @@ export function parseNumberText(text) {
   return [NaN, 0];
 }
 
+// A number as a character code, as char() converts it: truncated and
+// clamped to 0..65535, NaN as 0.
+export const charCode = (x) => (Number.isNaN(x) ? 0 : Math.min(65535, Math.max(0, Math.trunc(x))));
+
 // Memory a value takes, as whos reports it.
 function valueBytes(v) {
   if (v instanceof Mat) return v.numel * (v.isChar ? 2 : v.isLogical ? 1 : v.isComplex ? 16 : 8);
@@ -52,6 +56,19 @@ function valueBytes(v) {
   if (v instanceof FunctionHandle) return 32;
   if (v && v.data && v.fieldNames) return 64 + v.data.reduce((s, m) => s + [...m.values()].reduce((t, x) => t + 104 + valueBytes(x), 0), 0);
   return 0;
+}
+
+// Applies fn to a char array, or to each element of a cell array of text
+// (returning a cell array of the same shape).
+function eachText(v, fname, fn) {
+  if (v instanceof Cell) {
+    return new Cell(v.rows, v.cols, v.data.map(x => {
+      if (!(x instanceof Mat) || !(x.isChar || x.isEmpty)) throw new MatlabError(`${fname}: cell array elements must be character vectors`);
+      return fn(x.isChar ? x : new Mat(x.rows, x.cols, x.re, null, { isChar: true }));
+    }));
+  }
+  if (!(v instanceof Mat)) throw new MatlabError(`Undefined function '${fname}' for input arguments of type '${valueClassName(v)}'.`, 'MATLAB:UndefinedFunction');
+  return fn(v);
 }
 
 export function registerSystem(reg) {
@@ -156,8 +173,8 @@ export function registerSystem(reg) {
   reg.set('isnumeric', { fn: (args) => [Mat.logicalScalar(args[0] instanceof Mat && !args[0].isChar && !args[0].isLogical)] });
   reg.set('ischar', { fn: (args) => [Mat.logicalScalar(args[0] instanceof Mat && args[0].isChar)] });
   reg.set('islogical', { fn: (args) => [Mat.logicalScalar(args[0] instanceof Mat && args[0].isLogical)] });
-  reg.set('isreal', { fn: (args) => [Mat.logicalScalar(args[0] instanceof Mat && !args[0].isComplex)] });
   reg.set('iscomplex', { fn: (args) => [Mat.logicalScalar(!!args[0].isComplex)] });
+  reg.set('isreal', { fn: (args) => [Mat.logicalScalar(args[0] instanceof Mat && !args[0].isComplex)] });
 
   reg.set('double', {
     fn: (args) => {
@@ -182,25 +199,30 @@ export function registerSystem(reg) {
       if (args.length === 1 && args[0] instanceof Mat) {
         const a = args[0];
         if (a.isChar) return [a];
-        const out = new Mat(a.rows, a.cols, Float64Array.from(a.re), null, { isChar: true });
-        return [out];
+        if (a.isLogical) throw new MatlabError('Conversion to char from logical is not possible.');
+        if (a.isComplex) throw new MatlabError('Complex values cannot be converted to chars', 'MATLAB:noConversionComplexToChar');
+        return [new Mat(a.rows, a.cols, Float64Array.from(a.re, charCode), null, { isChar: true })];
       }
       const lines = [];
+      // Each argument adds its rows; an empty one adds a blank row.
       const addRows = (m) => {
-        if (m.isChar && m.rows === 0) { lines.push(''); return; }
+        if (m.rows === 0) { lines.push(''); return; }
         for (let r = 0; r < m.rows; r++) {
           let s = '';
-          for (let c = 0; c < m.cols; c++) s += String.fromCharCode(m.re[c * m.rows + r]);
+          for (let c = 0; c < m.cols; c++) s += String.fromCharCode(m.isChar ? m.re[c * m.rows + r] : charCode(m.re[c * m.rows + r]));
           lines.push(s);
         }
       };
+      if (args.length > 1 && args.some(a => a instanceof Cell)) throw new MatlabError('Inputs must be character arrays.');
       for (const a of args) {
+        if (a instanceof Mat && a.isComplex) throw new MatlabError('Complex values cannot be converted to chars', 'MATLAB:noConversionComplexToChar');
         if (a instanceof Cell) {
           for (const x of a.data) {
-            if (!(x instanceof Mat)) throw new MatlabError('char: cell elements must be character arrays or numbers');
+            if (!(x instanceof Mat) || !(x.isChar || x.isEmpty)) throw new MatlabError('Cell elements must be character arrays.');
             addRows(x);
           }
         } else if (a instanceof Mat) addRows(a);
+        else if (a instanceof FunctionHandle) lines.push(a.name || a.displayName()); // char(@sin) is 'sin'
         else throw new MatlabError(`char: cannot convert ${valueClassName(a)} to char`);
       }
       return [charMatrix(lines)];
@@ -235,8 +257,10 @@ export function registerSystem(reg) {
       const a = args[0];
       if (!(a instanceof Mat)) throw new MatlabError('num2str: input must be numeric or char');
       if (a.isChar) return [a];
+      if (a.isEmpty) return [new Mat(0, 0, new Float64Array(0), null, { isChar: true })];
       if (args.length >= 2 && args[1] instanceof Mat && args[1].isChar) {
-        // num2str(A, format): the format applied to each row.
+        // num2str(A, format): the format applied to each row, leading blanks
+        // shared by all rows removed.
         const fmt = args[1].toJSString();
         const lines = [];
         for (let r = 0; r < a.rows; r++) {
@@ -244,19 +268,20 @@ export function registerSystem(reg) {
           for (let c = 0; c < a.cols; c++) vals.push(a.re[c * a.rows + r]);
           lines.push(doSprintf(fmt, vals));
         }
-        return [charMatrix(lines)];
+        return [trimmedRows(lines)];
       }
-      if (args.length >= 2) {
-        // num2str(A, precision): %.<precision>g
+      if (args.length >= 2 && !args[1].isEmpty) {
+        // num2str(A, precision): MATLAB's %<p+7>.<p>g for each column, leading
+        // blanks shared by all rows removed.
         const p = Math.round(args[1].toScalarNumber());
-        if (!(p > 0)) throw new MatlabError('num2str: precision must be a positive integer');
+        if (!(p >= 0)) throw new MatlabError('num2str: precision must be a non-negative integer');
         const lines = [];
         for (let r = 0; r < a.rows; r++) {
           const vals = [];
           for (let c = 0; c < a.cols; c++) vals.push(a.re[c * a.rows + r]);
-          lines.push(vals.map(v => doSprintf(`%.${p}g`, [v])).join('  '));
+          lines.push(vals.map(v => doSprintf(`%${p + 7}.${Math.max(p, 1)}g`, [v])).join(''));
         }
-        return [charMatrix(lines)];
+        return [trimmedRows(lines)];
       }
       return [num2strDefault(a)];
     },
@@ -266,9 +291,9 @@ export function registerSystem(reg) {
     fn: (args) => {
       const a = args[0];
       if (!(a instanceof Mat)) throw new MatlabError('mat2str: input must be numeric, logical or char');
-      const n = args.length >= 2 ? Math.round(args[1].toScalarNumber()) : 15;
-      if (!(n >= 1 && n <= 100)) throw new MatlabError('mat2str: precision must be a positive integer (at most 100)');
-      return [Mat.fromString(mat2strValue(a, n))];
+      const n = args.length >= 2 && !args[1].isEmpty ? Math.round(args[1].toScalarNumber()) : 15;
+      if (n > 100) throw new MatlabError('mat2str: precision must be at most 100');
+      return [Mat.fromString(mat2strValue(a, n >= 1 ? n : 1))];
     },
   });
 
@@ -410,13 +435,39 @@ export function registerSystem(reg) {
   }
   reg.set('strcmp', { fn: (args) => [strCompare(args, false)] });
   reg.set('strcmpi', { fn: (args) => [strCompare(args, true)] });
-  reg.set('upper', { fn: (args) => [Mat.fromString(args[0].toJSString().toUpperCase())] });
-  reg.set('lower', { fn: (args) => [Mat.fromString(args[0].toJSString().toLowerCase())] });
-  reg.set('strtrim', { fn: (args) => [Mat.fromString(args[0].toJSString().trim())] });
+  // upper/lower keep the shape of a char array, map a cell array of text
+  // element by element and return other numeric input unchanged.
+  const changeCase = (fname, upper) => ({
+    fn: (args) => [!(args[0] instanceof Mat || args[0] instanceof Cell) ? args[0] : eachText(args[0], fname, (m) => {
+      if (!m.isChar) return m;
+      const out = new Mat(m.rows, m.cols, Float64Array.from(m.re, c => { const ch = String.fromCharCode(c); const t = upper ? ch.toUpperCase() : ch.toLowerCase(); return t.length === 1 ? t.charCodeAt(0) : c; }), null, { isChar: true });
+      return out;
+    })],
+  });
+  reg.set('upper', changeCase('upper', true));
+  reg.set('lower', changeCase('lower', false));
+  // strtrim removes leading and trailing whitespace (and null characters);
+  // for a char matrix, the columns that are blank in every row.
+  reg.set('strtrim', {
+    fn: (args) => [eachText(args[0], 'strtrim', (m) => {
+      if (!m.isChar) throw new MatlabError('strtrim: input must be a character array or a cell array of character vectors');
+      if (m.isEmpty) return m;
+      const blank = (c) => c === 0 || /\s/.test(String.fromCharCode(c));
+      const colBlank = (c) => { for (let r = 0; r < m.rows; r++) if (!blank(m.re[c * m.rows + r])) return false; return true; };
+      let first = 0, last = m.cols - 1;
+      while (first <= last && colBlank(first)) first++;
+      while (last >= first && colBlank(last)) last--;
+      const cols = Math.max(0, last - first + 1);
+      return new Mat(m.rows, cols, m.re.slice(first * m.rows, (first + cols) * m.rows), null, { isChar: true });
+    })],
+  });
   reg.set('strrep', {
     fn: (args) => {
-      const s = args[0].toJSString(), from = args[1].toJSString(), to = args[2].toJSString();
-      return [Mat.fromString(from === '' ? s : s.split(from).join(to))];
+      const from = args[1].toJSString(), to = args[2].toJSString();
+      return [eachText(args[0], 'strrep', (m) => {
+        const s = m.toJSString();
+        return from === '' ? m : Mat.fromString(s.split(from).join(to));
+      })];
     },
   });
   reg.set('str2double', {

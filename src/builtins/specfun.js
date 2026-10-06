@@ -53,6 +53,7 @@ export function erfc(x) {
 // erfcx(x) = exp(x^2) * erfc(x), without overflow for large x.
 function erfcx(x) {
   if (Number.isNaN(x)) return NaN;
+  if (x === Infinity) return 0;
   if (x >= 2) return erfcxCF(x);
   if (x < -26.6) return Infinity;
   return Math.exp(x * x) * erfc(x);

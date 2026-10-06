@@ -1,0 +1,23 @@
+% More numbers: widths, signs, scale factors, special values.
+a = -5
+b = [1 -1]
+c = [100 2]
+d = [1000 2]
+e = [99999 1]
+f = 123456789
+g = 1e9
+h = [1 2.5 NaN]
+k = [1e-5 1]
+m = [1e5 1.5]
+n = -0.5
+p = [0.001 -0.002]
+q = 1e-10
+r = [1;2.5;-3]
+s = [1e10 1]
+t = [-1e5 2.5]
+u = 0.1 + 0.2
+v = [NaN NaN]
+w = [Inf -Inf]
+x = -Inf
+y = 1/3
+z = [1/3 2/3; 1 4/3]

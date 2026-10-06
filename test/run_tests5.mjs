@@ -56,7 +56,7 @@ const show = (h, src) => { h.clearOutput(); h.run(src); return h.getOutput(); };
   run('acc = 0; for e = {1, 2, 3}, acc = acc + e{1}; end');
   check('for over a cell', fmtVar(interp, 'acc'), 6);
   check('cell display', show(h, "z = {1, 'two', [3 4], {5}}"), "z =\n  1x4 cell array\n\n    {[1]}    {'two'}    {[3 4]}    {1x1 cell}\n");
-  check('cs-list display', show(h, 'r = {1, 2}; r{:}'), 'ans =\n   1\nans =\n   2\n');
+  check('cs-list display', show(h, 'r = {1, 2}; r{:}'), 'ans =\n     1\nans =\n     2\n');
 }
 
 // ---------------- structs ----------------

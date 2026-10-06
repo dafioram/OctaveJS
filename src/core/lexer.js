@@ -79,6 +79,16 @@ export function tokenize(source) {
     tokens.push({ type, value, line, col, spaceBefore: sawSpace, start: tokStart, end: i });
     sawSpace = false;
   }
+  // Whether tokens[k] (a ')') closes an anonymous function's parameter
+  // list, @(x): a quote after it starts the body, so it is a string.
+  function closesAnonParams(k) {
+    let depth = 0;
+    for (let j = k; j >= 0; j--) {
+      if (tokens[j].type === TT.RPAREN) depth++;
+      else if (tokens[j].type === TT.LPAREN && --depth === 0) return j > 0 && tokens[j - 1].type === TT.AT;
+    }
+    return false;
+  }
   function lastReal() {
     for (let k = tokens.length - 1; k >= 0; k--) {
       if (tokens[k].type !== TT.NEWLINE) return tokens[k];
@@ -194,7 +204,8 @@ export function tokenize(source) {
     // String literal (single-quoted char array) vs transpose
     if (c === "'") {
       const inLiteral = nesting.length > 0 && nesting[nesting.length - 1] !== '(';
-      if (endsValue(lastReal()) && !(inLiteral && sawSpace)) {
+      const prev = lastReal();
+      if (endsValue(prev) && !(inLiteral && sawSpace) && !(prev.type === TT.RPAREN && closesAnonParams(tokens.lastIndexOf(prev)))) {
         advance();
         push(TT.OP, "'");
         continue;

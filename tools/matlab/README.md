@@ -31,6 +31,9 @@ lacks (for example a toolbox function in the student edition, such as
 on. The script also records the installed products (`ver`), and the
 comparison lists such functions once instead of reporting every call.
 
+The script needs MATLAB R2008a or later (it uses `onCleanup` and
+`catch err`).
+
 Nothing random is recorded: MatWeb's random numbers are statistically
 equivalent to MATLAB's, not the same stream. The script only uses
 long-standing MATLAB features, so older releases work too; functions an
@@ -52,6 +55,27 @@ MatWeb follows current MATLAB, so a difference from an older release
 needs checking against the current documentation before it becomes a
 fix or a test (implicit expansion, the `string` type and some error
 messages changed over the years).
+
+## Locking the results in
+
+A recording that has been checked is stored as
+`reference/<release>.txt` (`reference/R2015a.txt` today), with every
+remaining difference listed in `reference/<release>-known.json` with its
+reason. `test/run_tests16.mjs` (part of `npm test`) compares MatWeb with
+each stored recording and fails on a new difference or on a listed
+difference that now matches. After an intended change, regenerate the
+list and review its diff:
+
+```sh
+node tools/matlab/compare-reference.mjs tools/matlab/reference/R2015a.txt \
+  --update-known=tools/matlab/reference/R2015a-known.json
+```
+
+New differences get a default reason by category (lenient input,
+unsupported input, newer-than-R2015a behavior, value to review); edit the
+JSON to refine it. A newer recording of the same release (for example
+after adding cases to the script) replaces the .txt file; then
+regenerate the list.
 
 ## Regenerating the script
 

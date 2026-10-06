@@ -1,10 +1,10 @@
 >> t = true
 t =
-   1
+     1
 >> tf = [true false; false true]
 tf =
-   1   0
-   0   1
+     1     0
+     0     1
 >> str = 'hello'
 str =
 hello
@@ -15,9 +15,9 @@ def
 >> disp('plain text')
 plain text
 >> disp([1 2 3])
-   1   2   3
+     1     2     3
 >> disp(pi)
-   3.1416
+    3.1416
 >> fprintf('%d apples, %.2f pears\n', 3, 2.5)
 3 apples, 2.50 pears
 >> fprintf('%s|', 'a', 'bc'); fprintf('\n')

@@ -169,10 +169,10 @@ const D = Math.PI / 180;
   check('factor', [h.re('f1'), h.re('f2'), h.re('f3'), h.re('f4')], [[2, 2, 2, 3, 3, 5], [97], [1], [257, 4278255361]]);
   checkThrows('factor of a negative', () => h.run('factor(-4)'), /nonnegative integer/);
   h.run("p = perms([1 2 3]); pc = perms('ab');");
-  check('perms in reverse lexicographic order', [h.re('p'), h.lines('pc')], [[3, 3, 2, 2, 1, 1, 2, 1, 3, 1, 3, 2, 1, 2, 1, 3, 2, 3], ['ba', 'ab']]);
+  check("perms in MATLAB's order", [h.re('p'), h.lines('pc')], [[3, 3, 2, 2, 1, 1, 2, 1, 3, 1, 2, 3, 1, 2, 1, 3, 3, 2], ['ba', 'ab']]);
   h.run("[n, d] = rat(pi); [n2, d2] = rat(pi, 1e-2); [n3, d3] = rat([0.5 0.75 -0.2]); s1 = rat(pi); s2 = rat(0.75); s3 = rat(3); r = rats(0.75);");
   check('rat', [h.v('n'), h.v('d'), h.v('n2'), h.v('d2'), h.re('n3'), h.re('d3')], [355, 113, 22, 7, [1, 3, -1], [2, 4, 5]]);
-  check('rat as text', [h.v('s1'), h.v('s2'), h.v('s3')], ['3 + 1/(7 + 1/16)', '1 + 1/(-4)', '3']);
+  check('rat as text', [h.v('s1'), h.v('s2'), h.v('s3')], ['3 + 1/(7 + 1/(16))', '1 + 1/(-4)', '3']);
   check('rats', h.v('r').trim(), '3/4');
 }
 

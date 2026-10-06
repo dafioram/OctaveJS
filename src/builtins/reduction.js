@@ -73,7 +73,7 @@ function reduceAlong(mat, dim, fn) {
 }
 
 function cumAlong(mat, dim, combine, init) {
-  if (mat.isEmpty) return Mat.empty();
+  if (mat.isEmpty) return Mat.zeros(mat.rows, mat.cols); // same size as the input, as MATLAB
   if (dim >= 3) { const out = mat.clone(); out.isLogical = false; out.isChar = false; return out; }
   const re = new Float64Array(mat.numel);
   const im = mat.isComplex ? new Float64Array(mat.numel) : null;
@@ -144,7 +144,10 @@ function reduction(fn, nanDefault = false) {
 }
 
 function sumVals(vals) { return vals.reduce((a, v) => ({ re: a.re + v.re, im: a.im + v.im }), { re: 0, im: 0 }); }
-function prodVals(vals) { return vals.reduce((a, v) => ({ re: a.re * v.re - a.im * v.im, im: a.re * v.im + a.im * v.re }), { re: 1, im: 0 }); }
+function prodVals(vals) {
+  if (vals.every(v => v.im === 0)) return { re: vals.reduce((a, v) => a * v.re, 1), im: 0 }; // real: no NaN*0 imaginary parts
+  return vals.reduce((a, v) => ({ re: a.re * v.re - a.im * v.im, im: a.re * v.im + a.im * v.re }), { re: 1, im: 0 });
+}
 function meanVals(vals) { const s = sumVals(vals); return { re: s.re / vals.length, im: vals.length ? s.im / vals.length : 0 }; }
 
 export function registerReduction(reg) {
@@ -210,7 +213,8 @@ export function registerReduction(reg) {
     const includeNan = omitnan === false;
     const a = all ? asColumn(args[0]) : args[0];
     const better = (x, y) => isMax ? x > y : x < y;
-    if (args.length >= 2 && !args[1].isEmpty) {
+    // Exactly two arguments: the elementwise form (max(A, []) is []).
+    if ((allArgs.length === 2 && args.length === 2) || (args.length >= 2 && !args[1].isEmpty)) {
       const b = args[1];
       const cx = a.isComplex || b.isComplex;
       const key = (r, i) => cx ? Math.hypot(r, i) : r;
@@ -222,8 +226,13 @@ export function registerReduction(reg) {
         return better(kb, ka) ? [br, bi] : [ar, ai];
       })];
     }
-    if (a.isEmpty) return [Mat.empty(), Mat.empty()];
     const dim = all ? 1 : (getDimArg(args, 2) || defaultDim(a));
+    if (a.isEmpty) {
+      // An empty dimension stays empty: max(zeros(0, 3)) is 0x3.
+      const shrink = (len, d) => (d === dim && len > 0 ? 1 : len);
+      const e = () => Mat.zeros(shrink(a.rows, 1), shrink(a.cols, 2));
+      return [e(), e()];
+    }
     const key = (v) => a.isComplex ? Math.hypot(v.re, v.im) : v.re;
     const pick = (vals) => {
       let best = -1;

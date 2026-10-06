@@ -538,8 +538,8 @@ class Parser {
   parsePrimary() {
     const t = this.cur();
 
-    if (t.type === TT.NUMBER) { this.advance(); return { type: 'Num', value: t.value }; }
-    if (t.type === TT.IMAG_NUMBER) { this.advance(); return { type: 'ImagNum', value: t.value }; }
+    if (t.type === TT.NUMBER) { this.advance(); return { type: 'Num', value: t.value, raw: this.source.slice(t.start, t.end) }; }
+    if (t.type === TT.IMAG_NUMBER) { this.advance(); return { type: 'ImagNum', value: t.value, raw: this.source.slice(t.start, t.end) }; }
     if (t.type === TT.STRING) { this.advance(); return { type: 'Str', value: t.value }; }
     if (t.type === TT.KEYWORD && t.value === 'end') { this.advance(); return { type: 'End' }; }
     if (t.type === TT.IDENT) { this.advance(); return { type: 'Ident', name: t.value }; }

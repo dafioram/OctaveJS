@@ -720,8 +720,9 @@ export class Interpreter {
 
   _concat(vals, horizontal) {
     if (vals.some(v => v instanceof Cell)) {
-      // [c1, c2] joins cells; a non-cell item is wrapped as a 1x1 cell.
-      return this._concatContainers(vals.map(v => v instanceof Cell ? v : new Cell(1, 1, [v])), horizontal);
+      // [c1, c2] joins cells; a non-cell item is wrapped as a 1x1 cell,
+      // except [] which is dropped ([[], {1}] is {1}).
+      return this._concatContainers(vals.filter(v => !(v instanceof Mat && v.rows === 0 && v.cols === 0)).map(v => v instanceof Cell ? v : new Cell(1, 1, [v])), horizontal);
     }
     if (vals.some(v => v instanceof StructArray)) {
       const items = vals.filter(v => !(v instanceof Mat && v.isEmpty));
@@ -736,9 +737,10 @@ export class Interpreter {
   }
 
   _concatContainers(arrs, horizontal) {
-    arrs = arrs.filter(a => !(a.rows === 0 && a.cols === 0));
     const isCell = arrs.length === 0 || arrs[0] instanceof Cell;
-    if (arrs.length === 0) return Cell.empty();
+    const all = arrs;
+    arrs = arrs.filter(a => !(a.rows === 0 && a.cols === 0));
+    if (arrs.length === 0) return isCell ? Cell.empty() : all[0];
     if (arrs.length === 1) return arrs[0];
     const first = arrs[0];
     if (!isCell) {
@@ -771,8 +773,9 @@ export class Interpreter {
   }
 
   _hconcatMats(mats) {
+    const all = mats;
     mats = mats.filter(m => !(m.isEmpty && m.rows === 0 && m.cols === 0));
-    if (mats.length === 0) return Mat.empty();
+    if (mats.length === 0) return emptyConcat(all);
     const rows = mats[0].rows;
     for (const m of mats) if (m.rows !== rows) throw new MatlabError('Dimensions of arrays being concatenated are not consistent.', 'MATLAB:catenate:dimensionMismatch');
     const cols = mats.reduce((s, m) => s + m.cols, 0);
@@ -790,12 +793,13 @@ export class Interpreter {
       }
       colOff += m.cols;
     }
-    return new Mat(rows, cols, re, im, concatClass(mats));
+    return charConcat(new Mat(rows, cols, re, im, concatClass(mats)));
   }
 
   _vconcatMats(mats) {
+    const all = mats;
     mats = mats.filter(m => !(m.isEmpty && m.rows === 0 && m.cols === 0));
-    if (mats.length === 0) return Mat.empty();
+    if (mats.length === 0) return emptyConcat(all);
     const cols = mats[0].cols;
     for (const m of mats) if (m.cols !== cols) throw new MatlabError('Dimensions of arrays being concatenated are not consistent.', 'MATLAB:catenate:dimensionMismatch');
     const rows = mats.reduce((s, m) => s + m.rows, 0);
@@ -813,7 +817,7 @@ export class Interpreter {
       }
       rowOff += m.rows;
     }
-    return new Mat(rows, cols, re, im, concatClass(mats));
+    return charConcat(new Mat(rows, cols, re, im, concatClass(mats)));
   }
 
   evalUnary(node, scope) {
@@ -959,13 +963,20 @@ export class Interpreter {
     if (this.builtins.has(name)) {
       const spec = this.builtins.get(name);
       if (spec.minArgs && argValues.length < spec.minArgs) throw new MatlabError('Not enough input arguments.', 'MATLAB:minrhs');
+      if (spec.maxArgs !== undefined && argValues.length > spec.maxArgs) throw new MatlabError('Too many input arguments.', 'MATLAB:TooManyInputs');
       if (spec.numericArgs) {
         const checked = spec.numericArgs === 'first' ? argValues.slice(0, 1) : argValues;
         const odd = checked.find(a => !(a instanceof Mat));
         if (odd) throw new MatlabError(`Undefined function '${name}' for input arguments of type '${valueClassName(odd)}'.`, 'MATLAB:UndefinedFunction');
       }
       const result = runBuiltin(name, spec.fn, argValues, nargout, this._builtinCtx(callerScope));
-      return result === undefined ? [] : result;
+      if (result === undefined) return [];
+      // MATLAB stores a result with an all-zero imaginary part as real
+      // (complex() is the exception that keeps it). Only new arrays are
+      // changed: one with references is stored somewhere (an argument passed
+      // through, a struct field) and is left alone.
+      if (name !== 'complex') for (const v of result) if (v instanceof Mat && v.im && v._refs === 0 && !argValues.includes(v) && v.im.every(x => x === 0)) v.im = null;
+      return result;
     }
     const mfile = this.loadMFile(name);
     if (mfile && mfile.kind === 'function') {
@@ -1328,6 +1339,20 @@ function isCsListNode(node) {
 
 // Class of a matrix concatenation: char wins (['abc' 10] is a char row),
 // logical only if every piece is logical, otherwise double.
+// [] of empty pieces: char if any piece is char ([''] is ''), else [].
+function emptyConcat(mats) {
+  return mats.some(m => m.isChar) ? new Mat(0, 0, new Float64Array(0), null, { isChar: true }) : Mat.empty();
+}
+
+// A concatenated array of class char holds character codes: numbers
+// joined with text are truncated and clamped to 0..65535, NaN to 0.
+function charConcat(m) {
+  if (!m.isChar) return m;
+  if (m.im) throw new MatlabError('Complex values cannot be converted to chars', 'MATLAB:noConversionComplexToChar');
+  for (let k = 0; k < m.re.length; k++) { const x = m.re[k]; m.re[k] = Number.isNaN(x) ? 0 : Math.min(65535, Math.max(0, Math.trunc(x))); }
+  return m;
+}
+
 function concatClass(mats) {
   return { isChar: mats.some(m => m.isChar), isLogical: mats.length > 0 && mats.every(m => m.isLogical) };
 }
@@ -1647,6 +1672,13 @@ export function formatMat(mat, style = 'short') {
     cells.push(row);
   }
   const width = Math.max(...cells.flat().map(s => s.length), 1);
+  // format short uses MATLAB's fixed column widths: integers (and
+  // logicals) 6 characters wide, 12 once a value reaches 1000; decimals 10.
+  const fixedWidth = long ? 0 : allInt && maxAbs < 1e9 ? (maxAbs < 1000 ? 6 : 12) : (n > 1 || (maxAbs >= 1e-3 && maxAbs < 1e3) || maxAbs === 0) ? 10 : 0;
+  if (fixedWidth) {
+    const w = Math.max(fixedWidth, width + 2);
+    return header + cells.map(row => row.map(s => s.padStart(w)).join('')).join('\n');
+  }
   return header + cells.map(row => '   ' + row.map(s => s.padStart(width)).join('   ')).join('\n');
 }
 

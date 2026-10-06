@@ -373,7 +373,7 @@ function niceWidth(raw) {
 // (3.5*std/n^(1/3)) rounded to a nice width.
 export function histogramEdges(data, { binEdges, numBins, binWidth } = {}) {
   if (binEdges) return binEdges;
-  if (data.length === 0) return [0, 1];
+  if (data.length === 0) return Array.from({ length: (numBins || 1) + 1 }, (_, k) => k / (numBins || 1)); // no data: [0, 1] split into the bins
   let mn = Math.min(...data), mx = Math.max(...data);
   if (numBins) {
     if (mn === mx) { mn -= 0.5; mx += 0.5; }

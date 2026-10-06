@@ -32,6 +32,17 @@ export function finiteScalarArg(v, fname, what = 'the size') {
   return n;
 }
 
+// For a linear operation implemented on real arrays: applies it to the
+// real and imaginary parts of the argument at `index` separately and
+// combines the results, so complex input works too.
+export function linearOnParts(args, index, op) {
+  const z = args[index];
+  if (!(z instanceof Mat) || !z.isComplex) return op(args);
+  const part = (vals) => { const a = args.slice(); a[index] = new Mat(z.rows, z.cols, Float64Array.from(vals)); return op(a); };
+  const re = part(z.re), im = part(z.im);
+  return new Mat(re.rows, re.cols, re.re, im.re.some(v => v !== 0) ? Float64Array.from(im.re) : null);
+}
+
 // A real scalar from a function's return value.
 export function realScalar(v, fname) {
   if (v.numel !== 1) throw new MatlabError(`${fname}: the function must return a scalar value (got ${v.sizeStr()})`);

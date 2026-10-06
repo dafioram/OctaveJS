@@ -7,7 +7,7 @@
 // power-of-two lengths, a direct DFT for short odd lengths and
 // Bluestein's chirp-z algorithm otherwise, so every length is O(n log n).
 
-import { Mat, MatlabError } from '../core/values.js';
+import { Mat, Cell, StructArray, MatlabError, selectElements, valueClassName } from '../core/values.js';
 
 // In-place radix-2 FFT (length a power of two); `sign` -1 forward, +1 inverse
 // (unscaled).
@@ -177,24 +177,20 @@ function shiftAlong(x, dim, k) {
   const len = dim === 1 ? m : n;
   if (len === 0) return x;
   const s = ((k % len) + len) % len;
-  const out = new Mat(m, n, new Float64Array(x.numel), x.im ? new Float64Array(x.numel) : null, { isChar: x.isChar, isLogical: x.isLogical });
-  for (let c = 0; c < n; c++) {
-    for (let r = 0; r < m; r++) {
-      const dst = dim === 1 ? c * m + (r + s) % m : ((c + s) % n) * m + r;
-      out.re[dst] = x.re[c * m + r];
-      if (out.im) out.im[dst] = x.im[c * m + r];
-    }
-  }
-  return out;
+  // Source position of each output element, for any kind of array.
+  const positions = [];
+  for (let c = 0; c < n; c++) for (let r = 0; r < m; r++) positions.push(dim === 1 ? c * m + (r - s + m) % m : ((c - s + n) % n) * m + r);
+  return selectElements(x, m, n, positions);
 }
 // fftshift(X) | fftshift(X, dim): move the zero-frequency term to the
 // middle (both dimensions of a matrix); ifftshift undoes it.
 function centerShift(args, inverse) {
   const x = args[0];
-  if (!(x instanceof Mat)) throw new MatlabError(`${inverse ? 'ifftshift' : 'fftshift'}: input must be numeric`);
+  if (!(x instanceof Mat || x instanceof Cell || x instanceof StructArray)) throw new MatlabError(`Undefined function '${inverse ? 'ifftshift' : 'fftshift'}' for input arguments of type '${valueClassName(x)}'.`, 'MATLAB:UndefinedFunction');
   const amount = (len) => (inverse ? -Math.floor(len / 2) : Math.floor(len / 2));
   if (args.length >= 2) {
-    const d = Math.round(args[1].toScalarNumber());
+    const d = args[1].toScalarNumber();
+    if (!(Number.isInteger(d) && d >= 1)) throw new MatlabError('DIM must be a positive integer.', `MATLAB:${inverse ? 'ifftshift' : 'fftshift'}:DimNotPosInt`);
     if (d >= 3) return x;
     return shiftAlong(x, d, amount(d === 1 ? x.rows : x.cols));
   }
@@ -223,6 +219,8 @@ export function registerFFT(reg) {
   });
   reg.set('fft2', twoD('fft2', false));
   reg.set('ifft2', twoD('ifft2', true));
-  reg.set('fftshift', { fn: (args) => [centerShift(args, false)] });
-  reg.set('ifftshift', { fn: (args) => [centerShift(args, true)] });
+  // fftshift/ifftshift rearrange any kind of array (cells too), so they
+  // skip the numeric-only argument check.
+  reg.set('fftshift', { fn: (args) => [centerShift(args, false)], anyType: true });
+  reg.set('ifftshift', { fn: (args) => [centerShift(args, true)], anyType: true });
 }

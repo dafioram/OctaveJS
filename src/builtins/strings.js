@@ -32,6 +32,8 @@ const toLogicalArray = (shape, vals) => {
 const toCell = (shape, vals) => new Cell(shape.rows, shape.cols, vals);
 
 function rowVector(vals) { return new Mat(1, vals.length, Float64Array.from(vals)); }
+// Match positions: a row, or [] (0x0) when there are none, as MATLAB.
+const indices = (vals) => (vals.length ? rowVector(vals) : Mat.empty());
 
 // Escapes MATLAB processes in regexprep replacement text.
 function unescapeText(s) {
@@ -80,8 +82,8 @@ function regexpOne(str, expr, opts, nargout) {
     return Mat.fromRows(ranges.map(r => (r ? [r[0] + 1, r[1]] : [m.index + 1, m.index])));
   };
   const build = {
-    start: () => (opts.once ? (matches[0] ? Mat.scalar(matches[0].index + 1) : Mat.empty()) : rowVector(matches.map(m => m.index + 1))),
-    end: () => (opts.once ? (matches[0] ? Mat.scalar(matches[0].index + matches[0][0].length) : Mat.empty()) : rowVector(matches.map(m => m.index + m[0].length))),
+    start: () => (opts.once ? (matches[0] ? Mat.scalar(matches[0].index + 1) : Mat.empty()) : indices(matches.map(m => m.index + 1))),
+    end: () => (opts.once ? (matches[0] ? Mat.scalar(matches[0].index + matches[0][0].length) : Mat.empty()) : indices(matches.map(m => m.index + m[0].length))),
     tokenextents: () => (opts.once ? (matches[0] ? extentsOf(matches[0]) : Mat.empty()) : new Cell(1, matches.length, matches.map(extentsOf))),
     match: () => (opts.once ? Mat.fromString(matches[0] ? matches[0][0] : '') : new Cell(1, matches.length, matches.map(m => Mat.fromString(m[0])))),
     tokens: () => (opts.once ? (matches[0] ? tokensOf(matches[0]) : Cell.empty(1, 0)) : new Cell(1, matches.length, matches.map(tokensOf))),
@@ -147,12 +149,22 @@ export function registerStrings(reg) {
   // overlapping) occurrence; a cell array str gives a cell of results.
   reg.set('strfind', {
     fn: (args) => {
+      // Numeric arrays are searched as sequences of values, as MATLAB does.
+      const seq = (v) => (v instanceof Mat ? Array.from(v.re) : null);
+      if (args[0] instanceof Mat && !args[0].isChar && seq(args[1])) {
+        const s = seq(args[0]), p = seq(args[1]);
+        if (!p.length) return [Mat.empty()];
+        const idx = [];
+        for (let i = 0; i + p.length <= s.length; i++) if (p.every((x, k) => s[i + k] === x)) idx.push(i + 1);
+        return [indices(idx)];
+      }
+      if (args[1] instanceof Mat && args[1].isEmpty) return [args[0] instanceof Cell ? new Cell(args[0].rows, args[0].cols, args[0].data.map(() => Mat.empty())) : Mat.empty()];
       const pat = text(args[1], 'strfind: pattern');
       const find = (s) => {
         const idx = [];
-        if (pat.length === 0) return Mat.zeros(1, 0);
+        if (pat.length === 0) return Mat.empty();
         for (let i = s.indexOf(pat); i !== -1; i = s.indexOf(pat, i + 1)) idx.push(i + 1);
-        return idx.length ? rowVector(idx) : Mat.zeros(1, 0);
+        return idx.length ? rowVector(idx) : Mat.empty(); // no match: [] (0x0), as MATLAB
       };
       return [mapText(args[0], 'strfind: input', find, toCell)];
     },

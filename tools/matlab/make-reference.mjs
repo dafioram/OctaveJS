@@ -18,6 +18,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { ROWS, ERRORS } from '../../test/contracts-data.mjs';
 import { makeInterp } from '../../test/harness.js';
+import { EXTENDED, EXTENDED_ERRORS } from './extended-cases.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..', '..');
@@ -110,6 +111,8 @@ export async function referenceCases() {
   ROWS.forEach(([expr], k) => cases.push(valueCase('contract', `c${k + 1}`, expr)));
   ERRORS.forEach(([code], k) => cases.push(['error', `e${k + 1}`, code.endsWith(';') ? code : `${code};`, '']));
   PROBES.forEach((expr, k) => cases.push(valueCase('probe', `p${k + 1}`, expr)));
+  EXTENDED.forEach((expr, k) => cases.push(valueCase('lang', `l${k + 1}`, expr)));
+  EXTENDED_ERRORS.forEach((code, k) => cases.push(['langerr', `le${k + 1}`, code.endsWith(';') ? code : `${code};`, '']));
   const sweep = (await sweepFunctions()).map(name => [name, takesTwo(name)]);
   let s = 0;
   for (const [name, two] of sweep) for (const call of sweepCalls(name, two)) cases.push(valueCase('sweep', `s${++s}`, call));

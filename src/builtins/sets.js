@@ -8,8 +8,9 @@
 // result is a row vector when the inputs are row vectors and a column
 // otherwise.
 
-import { Mat, Cell, MatlabError } from '../core/values.js';
+import { Mat, Cell, MatlabError, selectElements } from '../core/values.js';
 import { sortComparator, cellstrValues, codeOrder } from './arrayops.js';
+import { charCode } from './system.js';
 
 const isText = (v) => v instanceof Mat && v.isChar;
 // Each NaN gets its own key, distinct across both arguments.
@@ -75,7 +76,7 @@ function setOptions(args, fname) {
 }
 
 // Builds the result array from chosen items (each with its source array).
-function build(picks, A, B, kind, rows, rowVector) {
+function build(picks, A, B, kind, rows, rowVector, setdiffMode = false) {
   if (kind === 'text') {
     const data = picks.map(p => Mat.fromString(p.item.s));
     return rowVector ? new Cell(1, data.length, data) : new Cell(data.length, 1, data);
@@ -95,14 +96,16 @@ function build(picks, A, B, kind, rows, rowVector) {
   const complex = picks.some(p => p.item.im !== 0);
   const out = rowVector ? new Mat(1, n, re) : new Mat(n, 1, re);
   if (complex) out.im = Float64Array.from(picks, p => p.item.im);
-  out.isChar = A.isChar && (!B || B.isChar || B.isEmpty);
-  out.isLogical = A.isLogical && (!B || B.isLogical || B.isEmpty);
+  // Char if either input is char (setdiff: if A is), the numbers becoming
+  // character codes, as MATLAB.
+  out.isChar = !complex && (A.isChar || (!!B && B.isChar && !setdiffMode));
+  if (out.isChar) out.re = out.re.map(charCode);
+  out.isLogical = !out.isChar && A.isLogical && (!B || B.isLogical || B.isEmpty);
   return out;
 }
 
 // Row-vector output: the inputs that matter are row vectors (an empty
 // 0-by-0 input doesn't count against it).
-const isRowLike = (v) => v.rows === 1 || (v.rows === 0 && v.cols === 0);
 
 function setOperation(fname, args, nargout) {
   if (args.length < 2) throw new MatlabError(`${fname}: expected ${fname}(A, B)`);
@@ -117,7 +120,8 @@ function setOperation(fname, args, nargout) {
   if (rows && A.numel && B.numel && A.cols !== B.cols) throw new MatlabError(`${fname}: A and B must have the same number of columns with 'rows'`);
   const kind = textMode ? 'text' : rows ? 'rows' : 'values';
   const compare = comparatorFor(kind, !textMode && (A.isComplex || B.isComplex));
-  const rowVector = !rows && isRowLike(A) && isRowLike(B) && !(A.numel === 0 && B.numel === 0 && !(A.rows === 1 || B.rows === 1));
+  // A row result when both inputs are rows (setdiff: when A is), as MATLAB.
+  const rowVector = !rows && (fname === 'setdiff' ? A.rows === 1 : A.rows === 1 && B.rows === 1);
   // First occurrence of each key in A and in B.
   const firstOf = (items) => {
     const m = new Map();
@@ -131,7 +135,7 @@ function setOperation(fname, args, nargout) {
   else if (fname === 'setdiff') picks = [...fa.values()].filter(it => !fb.has(it.key)).map(it => ({ item: it, from: 'A' }));
   else picks = [...[...fa.values()].filter(it => !fb.has(it.key)).map(it => ({ item: it, from: 'A' })), ...[...fb.values()].filter(it => !fa.has(it.key)).map(it => ({ item: it, from: 'B' }))];
   if (!stable) picks.sort((x, y) => compare(x.item, y.item) || (x.from === y.from ? x.item.idx - y.item.idx : x.from === 'A' ? -1 : 1));
-  const C = build(picks, A instanceof Mat ? A : B, B, kind, rows, rowVector);
+  const C = build(picks, A instanceof Mat ? A : B, B, kind, rows, rowVector, fname === 'setdiff');
   const out = [C];
   if (fname === 'intersect') {
     out.push(column(picks.map(p => p.item.idx)), column(picks.map(p => p.other.idx)));
@@ -255,9 +259,7 @@ function rot90(args) {
   };
   const positions = [];
   for (let j = 0; j < outCols; j++) for (let i = 0; i < outRows; i++) positions.push(src(i, j));
-  if (A instanceof Cell) return [new Cell(outRows, outCols, positions.map(p => A.data[p]))];
-  const out = new Mat(outRows, outCols, Float64Array.from(positions, p => A.re[p]), A.im ? Float64Array.from(positions, p => A.im[p]) : null, { isChar: A.isChar, isLogical: A.isLogical });
-  return [out];
+  return [selectElements(A, outRows, outCols, positions)];
 }
 
 export function registerSets(reg) {
