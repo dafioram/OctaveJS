@@ -25,6 +25,12 @@ for about 26,000 cases:
 - the command-window display of the scripts in `test/display/`
   (with `format compact`, via `evalc`).
 
+Every case runs in its own `try`/`catch`, so a function your MATLAB
+lacks (for example a toolbox function in the student edition, such as
+`prctile` before R2022b) is just recorded as an error and the run goes
+on. The script also records the installed products (`ver`), and the
+comparison lists such functions once instead of reporting every call.
+
 Nothing random is recorded: MatWeb's random numbers are statistically
 equivalent to MATLAB's, not the same stream. The script only uses
 long-standing MATLAB features, so older releases work too; functions an

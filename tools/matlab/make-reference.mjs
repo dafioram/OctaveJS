@@ -138,6 +138,12 @@ export function matlabSource({ cases, displays, sweep }) {
   add('fprintf(fid, \'#VERSION %s\\n\', version);');
   add('fprintf(fid, \'#COMPUTER %s\\n\', computer);');
   add('fprintf(fid, \'#DATE %s\\n\', datestr(now, 31));');
+  add('% Installed products, so functions from a missing toolbox can be told apart.');
+  add('try');
+  add('  products = ver;');
+  add('  for k = 1:numel(products), fprintf(fid, \'#PRODUCT %s %s\\n\', products(k).Name, products(k).Version); end');
+  add('catch');
+  add('end');
   add('fprintf(\'Recording MATLAB results for MatWeb in %s ...\\n\', outfile);');
   add('cases = {');
   for (const [kind, id, code, name] of cases.filter(c => c[0] !== 'sweep')) add(`  ${quote(kind)}, ${quote(id)}, ${quote(code)}, ${quote(name)}`);

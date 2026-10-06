@@ -24,7 +24,11 @@ export function parseReference(text) {
       if (line === '@@ enddisplay') { displays.push(disp); disp = null; } else disp.lines.push(line);
       continue;
     }
-    if (line.startsWith('#')) { const [k, ...v] = line.slice(1).split(' '); header[k] = v.join(' '); continue; }
+    if (line.startsWith('#')) {
+      const [k, ...v] = line.slice(1).split(' ');
+      if (k === 'PRODUCT') (header.products ||= []).push(v.join(' ')); else header[k] = v.join(' ');
+      continue;
+    }
     if (line.startsWith('@@ display ')) {
       const [, , file, k] = line.split(' ');
       disp = { file, line: Number(k), lines: [] };
@@ -133,17 +137,39 @@ if (process.argv[1] && process.argv[1].endsWith('compare-reference.mjs')) {
 
   const ref = parseReference(fs.readFileSync(file, 'utf8'));
   console.log(`Reference: MATLAB ${ref.header.VERSION || '?'} on ${ref.header.COMPUTER || '?'} (${ref.header.DATE || '?'})`);
+  if (ref.header.products) console.log(`Installed: ${ref.header.products.join('; ')}`);
+  // Functions this MATLAB doesn't have (a toolbox function in a release or
+  // edition without the toolbox): every call to them fails with "Undefined
+  // function" naming them. Their cases are listed once, not as differences.
+  const calledName = (code) => (/^r__ = ([A-Za-z]\w*)\(/.exec(code) || [])[1];
+  const calls = new Map();
+  for (const c of ref.cases) {
+    const name = calledName(c.code || '');
+    if (!name) continue;
+    const e = calls.get(name) || { total: 0, undefined: 0, plain: 0 };
+    e.total++;
+    if (c.error === 'MATLAB:UndefinedFunction' && c.message.includes(`'${name}'`)) {
+      e.undefined++;
+      // "for input arguments of type 'cell'" also happens when the
+      // function exists; a missing one fails for plain numbers too.
+      if (/function or variable|of type '(double|logical|char)'/.test(c.message)) e.plain++;
+    }
+    calls.set(name, e);
+  }
+  const missing = new Set([...calls].filter(([, e]) => e.total > 0 && e.undefined === e.total && e.plain > 0).map(([n]) => n));
+  if (missing.size) console.log(`Not in this MATLAB (skipped): ${[...missing].sort().join(', ')}`);
   const diffs = [];
   const stats = {};
   for (const c of ref.cases) {
     if (!kinds.includes(c.kind)) continue;
-    const st = (stats[c.kind] ||= { same: 0, different: 0, stale: 0 });
+    const st = (stats[c.kind] ||= { same: 0, different: 0, stale: 0, missing: 0 });
+    if (missing.has(calledName(c.code || ''))) { st.missing++; continue; }
     const gen = nameOf.get(`${c.kind} ${c.id}`);
     if (!gen || gen.code !== c.code) { st.stale++; continue; } // regenerate the .m file and rerun MATLAB
     const ours = runOurs(c.code, gen.name);
     let diff = null;
     if (c.kind === 'error') {
-      if (!ours.error && ours.error !== '') diff = `no error, MATLAB: ${c.message}`;
+      if (ours.noerror) diff = `no error, MATLAB: ${c.message}`;
       else if (ours.message !== c.message) diff = `message "${ours.message}", MATLAB "${c.message}"`;
     } else if (c.error !== undefined) {
       if (ours.value) diff = `returns a ${ours.value.cls} ${ours.value.size.join('x')}, MATLAB errors: ${c.message}`;
@@ -172,7 +198,7 @@ if (process.argv[1] && process.argv[1].endsWith('compare-reference.mjs')) {
   }
   for (const kind of Object.keys(stats)) {
     const st = stats[kind];
-    console.log(`\n== ${kind}: ${st.same} same, ${st.different} different${st.stale ? `, ${st.stale} stale (regenerate the .m file)` : ''}`);
+    console.log(`\n== ${kind}: ${st.same} same, ${st.different} different${st.missing ? `, ${st.missing} skipped (function not in this MATLAB)` : ''}${st.stale ? `, ${st.stale} stale (regenerate the .m file)` : ''}`);
     diffs.filter(d => d.kind === kind).slice(0, limit).forEach(d => console.log(`  ${d.code}  ->  ${d.diff}`));
   }
   const json = opt('json', null);

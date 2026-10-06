@@ -15,6 +15,12 @@ fprintf(fid, '#MATWEB-REFERENCE 1\n');
 fprintf(fid, '#VERSION %s\n', version);
 fprintf(fid, '#COMPUTER %s\n', computer);
 fprintf(fid, '#DATE %s\n', datestr(now, 31));
+% Installed products, so functions from a missing toolbox can be told apart.
+try
+  products = ver;
+  for k = 1:numel(products), fprintf(fid, '#PRODUCT %s %s\n', products(k).Name, products(k).Version); end
+catch
+end
 fprintf('Recording MATLAB results for MatWeb in %s ...\n', outfile);
 cases = {
   'contract', 'c1', 'r__ = floor([-1.5 2.5]);', 'r__'
