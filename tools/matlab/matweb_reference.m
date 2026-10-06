@@ -930,9 +930,11 @@ sweep = {
   'atan2d', true
   'atand', false
   'atanh', false
+  'base2dec', true
   'beta', true
   'betainc', true
   'betaln', true
+  'bin2dec', true
   'bounds', true
   'bsxfun', true
   'cat', true
@@ -970,6 +972,9 @@ sweep = {
   'cumprod', true
   'cumsum', true
   'cumtrapz', true
+  'dec2base', true
+  'dec2bin', true
+  'dec2hex', true
   'deconv', true
   'deg2rad', false
   'det', false
@@ -1013,6 +1018,7 @@ sweep = {
   'ge', true
   'getfield', true
   'gt', true
+  'hex2dec', true
   'histc', true
   'histcounts', true
   'horzcat', true
@@ -1108,6 +1114,7 @@ sweep = {
   'numfields', true
   'ones', true
   'or', true
+  'orderfields', true
   'orth', true
   'pchip', true
   'perms', false

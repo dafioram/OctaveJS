@@ -9,7 +9,8 @@
 
 import * as math from 'mathjs';
 import { Mat, Cell, StructArray, MatlabError, shape2D } from '../core/values.js';
-import { _registerLinalgHooks, transposeContainer } from '../core/interpreter.js';
+import { _registerLinalgHooks, transposeContainer, applyBinaryOp } from '../core/interpreter.js';
+import * as C from '../core/cmath.js';
 import { finiteScalarArg } from './numutil.js';
 import { householderQR, formQ, formR, qrSolve } from './qr.js';
 import { doSprintf } from './format.js';
@@ -675,7 +676,7 @@ export function registerLinalg(reg) {
       const a = args[0];
       const k = args.length >= 2 ? Math.round(finiteScalarArg(args[1], 'diag', 'K')) : 0;
       if (a.isEmpty) return [Mat.empty()];
-      if (a.isVector && a.numel > 1) {
+      if (a.isVector && (a.numel > 1 || k !== 0)) {
         const n = a.numel + Math.abs(k);
         const out = Mat.zeros(n, n);
         for (let i = 0; i < a.numel; i++) {
@@ -723,7 +724,26 @@ export function registerLinalg(reg) {
   reg.set('transpose', { fn: (args) => [transposeAny(args[0], false)] });
   reg.set('ctranspose', { fn: (args) => [transposeAny(args[0], true)] });
 
-  reg.set('det', { fn: (args) => { requireSquare(args[0], 'det'); return [fromRowMajor(math.det(toRowMajor(args[0])))]; } });
+  // det(A): the product of U's diagonal from [L, U, p] = lu(A, 'vector'),
+  // signed by the permutation, as MATLAB computes it.
+  reg.set('det', {
+    fn: (args) => {
+      const a = args[0]; requireSquare(a, 'det');
+      if (a.isEmpty) return [Mat.scalar(1)];
+      const [, U, p] = reg.get('lu').fn([a, Mat.fromString('vector')], 3);
+      const n = a.rows;
+      let re = 1, im = 0;
+      for (let k = 0; k < n; k++) [re, im] = C.cmul(re, im, U.re[k * n + k], U.im ? U.im[k * n + k] : 0);
+      const seen = new Array(n).fill(false);
+      for (let k = 0; k < n; k++) {
+        if (seen[k]) continue;
+        let len = 0;
+        for (let j = k; !seen[j]; j = p.re[j] - 1) { seen[j] = true; len++; }
+        if (len % 2 === 0) { re = -re; im = -im; }
+      }
+      return [im !== 0 ? Mat.complexScalar(re, im) : Mat.scalar(re)];
+    },
+  });
   reg.set('trace', {
     fn: (args) => {
       const a = args[0]; requireSquare(a, 'trace');
@@ -773,7 +793,12 @@ export function registerLinalg(reg) {
   reg.set('dot', {
     fn: (args) => {
       const a = args[0], b = args[1];
-      if (a.numel !== b.numel) throw new MatlabError('dot: vectors must have the same length');
+      // Matrices (or a dim argument): sum(conj(A).*B, dim), column by column.
+      if (args.length >= 3 || !(a.isVector && b.isVector && a.numel === b.numel)) {
+        if (a.rows !== b.rows || a.cols !== b.cols) throw new MatlabError('A and B must be same size.', 'MATLAB:dot:InputSizeMismatch');
+        const prod = applyBinaryOp('.*', reg.get('conj').fn([a])[0], b);
+        return reg.get('sum').fn([prod, ...args.slice(2)], 1);
+      }
       let re = 0, im = 0;
       if (!a.isComplex && !b.isComplex) {
         for (let k = 0; k < a.numel; k++) re += a.re[k] * b.re[k];
@@ -1170,5 +1195,26 @@ export function registerLinalg(reg) {
     },
   });
 
-  _registerLinalgHooks({ inverse, solve });
+  // A^p (p a non-integer scalar) and s^B, as MATLAB computes them:
+  // V*diag(f(d))/V from [V, D] = eig of the matrix.
+  function power(a, b) {
+    const base = a.numel === 1 ? a : null, M = base ? b : a;
+    if (M.isEmpty) return Mat.empty();
+    if (!M.re.every(Number.isFinite) || (M.im && !M.im.every(Number.isFinite))) return new Mat(M.rows, M.cols, new Float64Array(M.numel).fill(NaN));
+    const [V, D] = reg.get('eig').fn([M], 2);
+    const n = M.rows;
+    const F = Mat.zeros(n, n); F.im = new Float64Array(n * n);
+    for (let k = 0; k < n; k++) {
+      const d = k * n + k, dr = D.re[d], di = D.im ? D.im[d] : 0;
+      const [fr, fi] = base ? C.cpow(base.re[0], base.im ? base.im[0] : 0, dr, di) : C.cpow(dr, di, b.re[0], b.im ? b.im[0] : 0);
+      F.re[d] = fr; F.im[d] = fi;
+    }
+    if (F.im.every(x => x === 0)) F.im = null;
+    const out = applyBinaryOp('/', applyBinaryOp('*', V, F), V);
+    if (out.im && out.im.every(x => x === 0)) out.im = null;
+    delete out.warnings;
+    return out;
+  }
+
+  _registerLinalgHooks({ inverse, solve, power });
 }

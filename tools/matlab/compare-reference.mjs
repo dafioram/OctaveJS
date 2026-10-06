@@ -172,7 +172,9 @@ export async function compareReference(text, kinds = ['contract', 'probe', 'lang
     if (!nameOf.has(key)) { st.stale++; continue; } // the case is no longer generated
     const ours = runOurs(c.code, nameOf.get(key));
     let diff = null;
-    if (c.kind === 'error' || c.kind === 'langerr') {
+    if ((c.kind === 'error' || c.kind === 'langerr') && c.noerror) {
+      if (!ours.noerror) diff = `errors (${ours.message}), MATLAB runs without error`;
+    } else if (c.kind === 'error' || c.kind === 'langerr') {
       if (ours.noerror) diff = `no error, MATLAB: ${c.message}`;
       else if (ours.message !== c.message) diff = `message "${ours.message}", MATLAB "${c.message}"`;
     } else if (c.error !== undefined) {

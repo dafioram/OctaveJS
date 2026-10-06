@@ -290,5 +290,21 @@ const show = (h, src) => { h.clearOutput(); h.run(src); return h.getOutput(); };
   check('figure payload carries the plotted line', figs[0].fig.axes[0].objects.length, 1);
 }
 
+// ---------------- eval and str2func ----------------
+{
+  const h = makeInterp();
+  const { interp, run } = h;
+  run("eval('x = 3;'); y = eval('2 + 2'); eval('error(''boom'')', 'z = 5;'); [m, k] = eval('max([3 9 2])');");
+  check('eval runs in the workspace', [fmtVar(interp, 'x'), fmtVar(interp, 'y'), fmtVar(interp, 'z'), fmtVar(interp, 'm'), fmtVar(interp, 'k')], [3, 4, 5, 9, 2]);
+  check('eval displays like a statement', show(h, "eval('w = 7')"), 'w =\n     7\n');
+  run("function r = twice(a)\n  r = eval('2 * a');\nend\nt = twice(21);");
+  check('eval sees the function workspace', fmtVar(interp, 't'), 42);
+  run("q = 10; f = str2func('@(x) x.^2 + 1'); g = str2func('sin'); a = f(3); b = g(0); s = func2str(f);");
+  check('str2func', [fmtVar(interp, 'a'), fmtVar(interp, 'b'), fmtVar(interp, 's')], [10, 0, '@(x)x.^2+1']);
+  checkThrows('str2func handles see no workspace', () => run("f2 = str2func('@() q'); f2()"), /q/);
+  checkThrows('eval of bad text', () => run("eval('1 +');"), /./);
+  checkThrows('eval needs text', () => run('eval(5)'), /Undefined function 'eval' for input arguments of type 'double'/);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

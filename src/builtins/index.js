@@ -34,6 +34,9 @@ const MIN_ARGS = {
   circshift: 2, colon: 2, conv: 2, cross: 2, dot: 2, gcd: 2, isa: 2, kron: 2, lcm: 2,
   linspace: 2, logspace: 2, nchoosek: 2, polyfit: 3, polyval: 2, power: 2, realpow: 2,
   strrep: 3, sub2ind: 2, ind2sub: 2, squeeze: 1, writematrix: 2, upper: 1, lower: 1,
+  eval: 1, str2func: 1, strncmp: 3, strncmpi: 3, isspace: 1, isletter: 1, isstrprop: 2,
+  blanks: 1, deblank: 1, dec2bin: 1, dec2hex: 1, dec2base: 2, bin2dec: 1, hex2dec: 1,
+  base2dec: 2, orderfields: 1,
 };
 
 // Registers a module's builtins as numeric-only: a cell, struct or function
@@ -60,7 +63,8 @@ const ONE_ARG = [
 // its class, as MATLAB: max(true) is logical, mode('ab') is char.
 const KEEPS_CLASS = {
   max: ['logical'], min: ['logical'], cummax: ['logical'], cummin: ['logical'],
-  median: ['logical'], mode: ['logical', 'char'], sort: ['logical', 'char'],
+  median: ['logical'], mode: ['logical', 'char'], sort: ['logical', 'char'], diag: ['logical', 'char'],
+  nchoosek: ['char'],
 };
 function keepClass(spec, kinds) {
   const fn = spec.fn;

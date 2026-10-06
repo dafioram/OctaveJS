@@ -8,6 +8,8 @@
 // whole match, as in MATLAB.
 
 import { Mat, Cell, StructArray, MatlabError } from '../core/values.js';
+import { charMatrix } from './format.js';
+import { charCode } from './system.js';
 
 function isText(v) { return v instanceof Mat && v.isChar && v.rows <= 1; }
 function text(v, what) {
@@ -98,7 +100,8 @@ function regexpOne(str, expr, opts, nargout) {
       let last = 0;
       for (const m of matches) { pieces.push(str.slice(last, m.index)); last = m.index + m[0].length; }
       pieces.push(str.slice(last));
-      return new Cell(1, pieces.length, pieces.map(p => Mat.fromString(p)));
+      // An empty piece is a 0x0 char, as MATLAB returns it.
+      return new Cell(1, pieces.length, pieces.map(p => (p ? Mat.fromString(p) : new Mat(0, 0, new Float64Array(0), null, { isChar: true }))));
     },
   };
   const order = opts.selected.length ? opts.selected : REGEXP_OUTPUTS;
@@ -126,11 +129,28 @@ export function registerStrings(reg) {
       if (args.length === 0) throw new MatlabError('strcat requires at least one input');
       const cells = args.filter(a => a instanceof Cell);
       if (cells.length === 0) {
-        return [Mat.fromString(args.map(a => {
-          if (!(a instanceof Mat)) throw new MatlabError('strcat: inputs must be character vectors or cell arrays');
-          // Numbers are taken as character codes, as MATLAB does.
-          return a.isChar ? a.toJSString().replace(/[ \t\n\v\f\r]+$/, '') : String.fromCharCode(...Array.from(a.re, Math.round));
-        }).join(''))];
+        // Char (or numeric) arrays join side by side, row by row, each first
+        // losing its trailing columns of whitespace or nulls; a single row
+        // repeats to match the others. Numbers become character codes.
+        for (const a of args) if (!(a instanceof Mat)) throw new MatlabError('Inputs must be cell arrays or strings.', 'MATLAB:strcat:InvalidInputType');
+        const blank = (x) => x === 0 || x === 32 || (x >= 9 && x <= 13);
+        const parts = args.filter(a => a.numel > 0).map(a => {
+          let cols = a.cols;
+          while (cols > 0 && Array.from({ length: a.rows }, (_, r) => a.re[(cols - 1) * a.rows + r]).every(blank)) cols--;
+          return { a, cols };
+        });
+        // The rows of the nonempty arguments (all empty: strcat(zeros(1, 0)) is 1x0).
+        const R = Math.max(0, ...(parts.length ? parts : args.map(a => ({ a }))).map(p => p.a.rows));
+        if (R === 0) return [new Mat(0, 0, new Float64Array(0), null, { isChar: true })];
+        for (const p of parts) if (p.a.rows !== 1 && p.a.rows !== R) throw new MatlabError('All the inputs must have the same number of rows or a single row.', 'MATLAB:strcat:NumberOfRowsMismatch');
+        const width = parts.reduce((w, p) => w + p.cols, 0);
+        const out = new Mat(R, width, new Float64Array(R * width), null, { isChar: true });
+        let c0 = 0;
+        for (const { a, cols } of parts) {
+          for (let c = 0; c < cols; c++) for (let r = 0; r < R; r++) out.re[(c0 + c) * R + r] = charCode(a.re[c * a.rows + (a.rows === 1 ? 0 : r)]);
+          c0 += cols;
+        }
+        return [out];
       }
       const shape = cells.find(c => c.numel !== 1) || cells[0];
       for (const c of cells) if (c.numel !== 1 && (c.rows !== shape.rows || c.cols !== shape.cols)) throw new MatlabError('strcat: cell array inputs must be the same size');
@@ -138,7 +158,9 @@ export function registerStrings(reg) {
       for (let k = 0; k < shape.numel; k++) {
         out.push(Mat.fromString(args.map(a => {
           const v = a instanceof Cell ? a.data[a.numel === 1 ? 0 : k] : a;
-          return text(v, 'strcat: input');
+          if (!(v instanceof Mat) || !(v.isChar || v.isEmpty)) throw new MatlabError('Inputs must be cell arrays or strings.', 'MATLAB:strcat:InvalidInputType');
+          // A char argument loses its trailing whitespace; cell contents keep it.
+          return a instanceof Cell ? v.toJSString() : v.toJSString().replace(/[ \t\n\v\f\r]+$/, '');
         }).join('')));
       }
       return [new Cell(shape.rows, shape.cols, out)];
@@ -234,4 +256,74 @@ export function registerStrings(reg) {
       return ctx.interp.builtins.get('num2str').fn([rounded], 1, ctx);
     },
   });
+  registerBaseConversions(reg);
+}
+
+// dec2bin/dec2hex/dec2base: one row per element of D (taken as D(:)),
+// zero-padded to a common width (at least N digits). bin2dec/hex2dec/
+// base2dec read each row of a char matrix (or each cell of a cellstr)
+// into a column vector, ignoring spaces.
+const DIGITS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+function registerBaseConversions(reg) {
+  const toBase = (fname, fixedBase) => ({
+    fn: (args) => {
+      const d = args[0];
+      if (!(d instanceof Mat) || d.isComplex) throw new MatlabError(`Undefined function '${fname}' for input arguments of type '${d instanceof Mat ? 'double' : 'cell'}'.`, 'MATLAB:UndefinedFunction');
+      let symbols = DIGITS, k = 1;
+      if (!fixedBase) {
+        const b = args[1];
+        if (b instanceof Mat && b.isChar && b.numel > 1) symbols = b.toJSString();
+        else if (b instanceof Mat && b.numel === 1 && Number.isInteger(b.re[0]) && b.re[0] >= 2 && b.re[0] <= 36) symbols = DIGITS.slice(0, b.re[0]);
+        else throw new MatlabError('Base B must be an integer between 2 and 36 or a string of symbols.', 'MATLAB:dec2base:BaseNotIntegerOrSymbols');
+        k = 2;
+      } else symbols = DIGITS.slice(0, fixedBase);
+      let minLen = 0;
+      if (args.length > k) {
+        const n = args[k];
+        if (!(n instanceof Mat) || n.numel !== 1 || !Number.isInteger(n.re[0]) || n.re[0] < 0) throw new MatlabError('N must be a nonnegative integer.', `MATLAB:${fname}:InvalidN`);
+        minLen = n.re[0];
+      }
+      const base = symbols.length;
+      const rows = Array.from(d.re, (x) => {
+        if (!(x >= 0) || !Number.isInteger(x) || x >= 2 ** 53) throw new MatlabError('D must be a nonnegative integer smaller than flintmax.', `MATLAB:${fname}:InvalidInput`);
+        let t = '';
+        do { t = symbols[x % base] + t; x = Math.floor(x / base); } while (x > 0);
+        return t;
+      });
+      if (!rows.length) return [new Mat(0, 0, new Float64Array(0), null, { isChar: true })];
+      const width = Math.max(minLen, ...rows.map(t => t.length));
+      return [charMatrix(rows.map(t => symbols[0].repeat(width - t.length) + t))];
+    },
+  });
+  const fromBase = (fname, fixedBase, message) => ({
+    fn: (args) => {
+      const s = args[0];
+      let base = fixedBase;
+      if (!fixedBase) {
+        const b = args[1];
+        if (!(b instanceof Mat) || b.numel !== 1 || !Number.isInteger(b.re[0]) || b.re[0] < 2 || b.re[0] > 36) throw new MatlabError('Base B must be an integer between 2 and 36.', 'MATLAB:base2dec:InvalidBase');
+        base = b.re[0];
+      }
+      let lines;
+      if (s instanceof Cell) lines = s.data.map(x => { if (!(x instanceof Mat) || !(x.isChar || x.isEmpty)) throw new MatlabError('Input must be a character array or a cell array of strings.'); return x.toJSString(); });
+      else if (s instanceof Mat && (s.isChar || s.isEmpty)) lines = Array.from({ length: s.rows }, (_, r) => { let t = ''; for (let c = 0; c < s.cols; c++) t += String.fromCharCode(s.re[c * s.rows + r]); return t; });
+      else throw new MatlabError('Input must be a character array or a cell array of strings.', `MATLAB:${fname}:InputMustBeString`);
+      const out = lines.map(line => {
+        let v = 0;
+        for (const ch of line.toUpperCase().replace(/ /g, '')) {
+          const digit = DIGITS.indexOf(ch);
+          if (digit < 0 || digit >= base) throw new MatlabError(message(base), `MATLAB:${fname}:IllegalCharacter`);
+          v = v * base + digit;
+        }
+        return v;
+      });
+      return [new Mat(out.length, out.length ? 1 : 0, Float64Array.from(out))];
+    },
+  });
+  reg.set('dec2bin', toBase('dec2bin', 2));
+  reg.set('dec2hex', toBase('dec2hex', 16));
+  reg.set('dec2base', toBase('dec2base', 0));
+  reg.set('bin2dec', fromBase('bin2dec', 2, () => 'Binary string may consist only of characters 0 and 1'));
+  reg.set('hex2dec', fromBase('hex2dec', 16, () => 'Input string found with characters other than 0-9, a-f, or A-F.'));
+  reg.set('base2dec', fromBase('base2dec', 0, (b) => `String contains characters that are not valid digits in base ${b}.`));
 }

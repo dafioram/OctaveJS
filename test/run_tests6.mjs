@@ -71,7 +71,7 @@ const mat = (rows2d) => {
 {
   const { interp, run } = makeInterp();
   run('m2 = magic(2); m3 = magic(3); m4 = magic(4); m6 = magic(6); M = magic(10); sums = [unique(sum(M)) unique(sum(M, 2))\' trace(M) trace(fliplr(M))];');
-  check('magic(2)', fmtVar(interp, 'm2'), mat([[4, 3], [1, 2]]));
+  check('magic(2)', fmtVar(interp, 'm2'), mat([[1, 3], [4, 2]]));
   check('magic(3)', fmtVar(interp, 'm3'), mat([[8, 1, 6], [3, 5, 7], [4, 9, 2]]));
   check('magic(4)', fmtVar(interp, 'm4'), mat([[16, 2, 3, 13], [5, 11, 10, 8], [9, 7, 6, 12], [4, 14, 15, 1]]));
   check('magic(6)', fmtVar(interp, 'm6'), mat([[35, 1, 6, 26, 19, 24], [3, 32, 7, 21, 23, 25], [31, 9, 2, 22, 27, 20], [8, 28, 33, 17, 10, 15], [30, 5, 34, 12, 14, 16], [4, 36, 29, 13, 18, 11]]));
@@ -192,9 +192,9 @@ const mat = (rows2d) => {
   const show = (src) => { h.clearOutput(); run(src); return h.getOutput(); };
   check('format long scalar', show('format long; x = pi'), 'x =\n   3.141592653589793\n');
   check('format long vector', show('y = [1 2.5]'), 'y =\n   1.000000000000000   2.500000000000000\n');
-  check('format long e-notation', show('z = 1e10'), 'z =\n   1.000000000000000e+10\n');
+  check('format long e-notation', show('z = 1e10'), 'z =\n     1.000000000000000e+10\n');
   check('format (no argument) restores short', show('format; x = pi'), 'x =\n    3.1416\n');
-  checkThrows('unknown format style', () => run('format bank'), /unsupported style/);
+  checkThrows('unknown format style', () => run('format bank'), /Unknown command option 'bank'/);
 }
 
 // ---------------- settings survive a Stop (session restore) ----------------
@@ -215,6 +215,40 @@ const mat = (rows2d) => {
   s2.handle({ type: 'getVar', id: 2, name: 't' });
   const t = out.find(m => m.type === 'var').value.re[0];
   check('toc after restore is non-negative', t >= 0 && t < 60, true);
+}
+
+// ---------------- text classification, base conversion, orderfields ----------------
+{
+  const { interp, run } = makeInterp();
+  const v = (name) => fmtVar(interp, name);
+  run("a = strncmp('abcdef', 'abcxyz', 3); b = strncmpi('ABCdef', 'abcxyz', 3); c = strncmp({'abc', 'abd', 'x'}, 'abz', 2); d = strncmp('ab', 'abc', 5);");
+  check('strncmp/strncmpi', [v('a'), v('b'), v('c'), v('d')], [1, 1, row(1, 1, 0), 0]);
+  run("e = isspace(sprintf('a b\\t')); f = isletter('a1B_'); g = isstrprop('a1 F', 'digit'); h = isstrprop('aB1', 'upper'); k = isspace(5);");
+  check('character classes', [v('e'), v('f'), v('g'), v('h'), v('k')], [row(0, 1, 0, 1), row(1, 0, 1, 0), row(0, 1, 0, 0), row(0, 1, 0), 0]);
+  run("bl = blanks(3); db = deblank(sprintf('ab \\t')); dc = deblank({'a  ', ' b '});");
+  check('blanks/deblank', [v('bl'), v('db'), interp.workspace.get('dc').data.map(x => x.toJSString())], ['   ', 'ab', ['a', ' b']]);
+  run("b1 = dec2bin(10); b2 = dec2bin([1 5], 4); h1 = dec2hex(255); x1 = dec2base(23, 3); n1 = bin2dec('1010'); n2 = hex2dec({'ff', '10'}); n3 = base2dec('212', 3); n4 = bin2dec('1 0 1');");
+  check('dec2bin/dec2hex/dec2base', [v('b1'), interp.workspace.get('b2').rows, v('h1'), v('x1')], ['1010', 2, 'FF', '212']);
+  check('bin2dec/hex2dec/base2dec', [v('n1'), v('n2'), v('n3'), v('n4')], [10, col(255, 16), 23, 5]);
+  checkThrows('dec2bin of a negative', () => run('dec2bin(-1)'), /nonnegative integer/);
+  checkThrows('bin2dec of a bad digit', () => run("bin2dec('12')"), /only of characters 0 and 1/);
+  run("s = struct('b', 1, 'a', 2, 'c', 3); [t, p] = orderfields(s); u = orderfields(s, {'c', 'a', 'b'}); fu = fieldnames(u)';");
+  check('orderfields', [interp.workspace.get('t').fieldNames, v('p'), interp.workspace.get('fu').data.map(x => x.toJSString())], [['a', 'b', 'c'], col(2, 1, 3), ['c', 'a', 'b']]);
+  checkThrows('orderfields needs every field', () => run("orderfields(s, {'a'})"), /every field/);
+  run("r1 = realmax; r2 = realmin; r3 = flintmax; e1 = eps(1); e2 = eps([0.5 2]);");
+  check('realmax/realmin/flintmax/eps', [v('r1'), v('r2'), v('r3'), v('e1'), v('e2')], [Number.MAX_VALUE, 2.2250738585072014e-308, 2 ** 53, 2 ** -52, row(2 ** -53, 2 ** -51)]);
+}
+
+// ---------------- format short g / long g / short e ----------------
+{
+  const { run, getOutput, clearOutput } = makeInterp();
+  const show = (src) => { clearOutput(); run(src); return getOutput(); };
+  check('format short g', show('format short g; x = [pi 1e6 1e-6]'), 'x =\n       3.1416        1e+06        1e-06\n');
+  check('format long g', show('format long g; x = pi'), 'x =\n          3.14159265358979\n');
+  check('format short e', show('format short e; x = pi'), 'x =\n   3.1416e+00\n');
+  check('format shortG spelling', show("format('shortG'); x = 0.5"), 'x =\n          0.5\n');
+  check('integers stay integers', show('format long g; x = [1 2 3]'), 'x =\n     1     2     3\n');
+  check('format long keeps integer widths', show('format long; x = [1 1e6]'), 'x =\n           1     1000000\n');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

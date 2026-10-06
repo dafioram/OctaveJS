@@ -14,7 +14,11 @@ function shapeFromArgs(args, fname) {
   let a = args;
   // f(..., 'like', p): the class of p (always double here).
   if (a.length >= 2 && a[a.length - 2].isChar && a[a.length - 2].toJSString().toLowerCase() === 'like') a = a.slice(0, -2);
-  while (a.length > 0 && a[a.length - 1].isChar) a = a.slice(0, -1);
+  const NUMERIC_CLASSES = ['double', 'single', 'int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32', 'int64', 'uint64'];
+  if (a.length > 0 && a[a.length - 1].isChar) {
+    if (!NUMERIC_CLASSES.includes(a[a.length - 1].toJSString())) throw new MatlabError('CLASSNAME input must be a valid numeric class name.', `MATLAB:${fname}:invalidClassName`);
+    a = a.slice(0, -1);
+  }
   if (a.length === 0) return [1, 1];
   return shapeArgs(a, fname);
 }
@@ -82,7 +86,36 @@ export function registerSystem(reg) {
   reg.set('inf', constFill(Infinity, 'inf'));
   reg.set('NaN', constFill(NaN, 'NaN'));
   reg.set('nan', constFill(NaN, 'nan'));
-  reg.set('eps', { fn: () => [Mat.scalar(Number.EPSILON)] });
+  // eps | eps(X): the distance from abs(X) to the next larger double
+  // (NaN for Inf and NaN) | eps('double').
+  const spacing = (x) => {
+    x = Math.abs(x);
+    if (!Number.isFinite(x)) return NaN;
+    if (x < 2.2250738585072014e-308) return 2 ** -1074;
+    let e = Math.floor(Math.log2(x)); // corrected for log2 rounding near powers of two
+    if (2 ** e > x) e--; else if (2 ** (e + 1) <= x) e++;
+    return 2 ** (e - 52);
+  };
+  const classArg = (args, name) => {
+    if (!args.length) return true;
+    if (args.length === 1 && args[0] instanceof Mat && args[0].isChar) {
+      if (args[0].toJSString() === 'double') return true;
+      throw new MatlabError(`Unrecognized class '${args[0].toJSString()}'; ${name} supports 'double' only.`);
+    }
+    return false;
+  };
+  reg.set('eps', {
+    fn: (args) => {
+      if (classArg(args, 'eps')) return [Mat.scalar(Number.EPSILON)];
+      const x = args[0];
+      if (!(x instanceof Mat)) throw new MatlabError(`Undefined function 'eps' for input arguments of type '${valueClassName(x)}'.`, 'MATLAB:UndefinedFunction');
+      if (x.isComplex) throw new MatlabError('Input must be real.');
+      return [new Mat(x.rows, x.cols, Float64Array.from(x.re, spacing))];
+    },
+  });
+  reg.set('realmax', { fn: (args) => { classArg(args, 'realmax'); return [Mat.scalar(Number.MAX_VALUE)]; } });
+  reg.set('realmin', { fn: (args) => { classArg(args, 'realmin'); return [Mat.scalar(2.2250738585072014e-308)]; } });
+  reg.set('flintmax', { fn: (args) => { classArg(args, 'flintmax'); return [Mat.scalar(2 ** 53)]; } });
   reg.set('i', { fn: () => [Mat.complexScalar(0, 1)] });
   reg.set('j', { fn: () => [Mat.complexScalar(0, 1)] });
 
@@ -323,13 +356,15 @@ export function registerSystem(reg) {
     },
   });
 
-  // format long / format short / format (= short). compact/loose are
+  // format short | long | short g | long g | short e | long e (also
+  // written shortG, longE, ...); format alone is short. compact/loose are
   // accepted for compatibility and change nothing.
+  const FORMAT_STYLES = ['short', 'long', 'shortg', 'longg', 'shorte', 'longe'];
   reg.set('format', {
     fn: (args, _n, ctx) => {
-      const mode = args.length ? args[0].toJSString().toLowerCase() : 'short';
-      if (mode === 'long' || mode === 'short') ctx.interp.displayFormat = mode;
-      else if (mode !== 'compact' && mode !== 'loose') throw new MatlabError(`format: unsupported style '${mode}' (use short or long)`);
+      const mode = args.map(a => (a instanceof Mat && a.isChar ? a.toJSString() : '')).join('').toLowerCase() || 'short';
+      if (FORMAT_STYLES.includes(mode)) ctx.interp.displayFormat = mode;
+      else if (mode !== 'compact' && mode !== 'loose') throw new MatlabError(`Unknown command option '${mode}'.`, 'MATLAB:format:UnknownOption');
       return [];
     },
   });
@@ -394,6 +429,31 @@ export function registerSystem(reg) {
       return ctx.interp.callNamed(name, rest, nargout, ctx.scope);
     },
   });
+  // eval(expression) | eval(expression, catchExpression) | [a, b] = eval(expression)
+  reg.set('eval', {
+    fn: (args, nargout, ctx) => {
+      const text = (a) => {
+        if (!(a instanceof Mat) || !(a.isChar || a.isEmpty) || a.rows > 1) throw new MatlabError(`Undefined function 'eval' for input arguments of type '${valueClassName(a)}'.`, 'MATLAB:UndefinedFunction');
+        return a.toJSString();
+      };
+      const code = text(args[0]);
+      if (args.length < 2) return ctx.interp.evalString(code, ctx.scope, nargout);
+      const fallback = text(args[1]);
+      try { return ctx.interp.evalString(code, ctx.scope, nargout); }
+      catch (e) {
+        if (!(e instanceof MatlabError)) throw e;
+        return ctx.interp.evalString(fallback, ctx.scope, nargout);
+      }
+    },
+  });
+  // str2func('name') | str2func('@(x) ...')
+  reg.set('str2func', {
+    fn: (args, _n, ctx) => {
+      const a = args[0];
+      if (!(a instanceof Mat) || !a.isChar) throw new MatlabError(`Undefined function 'str2func' for input arguments of type '${valueClassName(a)}'.`, 'MATLAB:UndefinedFunction');
+      return [ctx.interp.handleFromString(a.toJSString())];
+    },
+  });
   reg.set('func2str', {
     fn: (args) => {
       if (!(args[0] instanceof FunctionHandle)) throw new MatlabError('func2str: input must be a function handle');
@@ -411,8 +471,10 @@ export function registerSystem(reg) {
   // ---- string utilities (cheap and useful now that char arrays exist) ----
   // strcmp/strcmpi compare text; with a cell array of strings on either
   // side they compare element by element and return a logical array.
-  function strCompare(args, fold) {
-    const norm = (v) => (v instanceof Mat && v.isChar && v.rows <= 1) ? (fold ? v.toJSString().toLowerCase() : v.toJSString()) : null;
+  // strcmp/strcmpi, and strncmp/strncmpi with `n` (the first n characters,
+  // or the whole text when shorter).
+  function strCompare(args, fold, limit = Infinity) {
+    const norm = (v) => (v instanceof Mat && v.isChar && v.rows <= 1) ? (fold ? v.toJSString().toLowerCase() : v.toJSString()).slice(0, limit) : null;
     const [a, b] = args;
     if (!(a instanceof Cell) && !(b instanceof Cell)) {
       const x = norm(a), y = norm(b);
@@ -435,6 +497,62 @@ export function registerSystem(reg) {
   }
   reg.set('strcmp', { fn: (args) => [strCompare(args, false)] });
   reg.set('strcmpi', { fn: (args) => [strCompare(args, true)] });
+  const strnArgs = (args, fname) => {
+    if (args.length < 3) throw new MatlabError('Not enough input arguments.', 'MATLAB:minrhs');
+    const n = args[2];
+    if (!(n instanceof Mat) || n.numel !== 1 || n.isComplex || !(n.re[0] >= 0) || !Number.isInteger(n.re[0])) throw new MatlabError(`N must be a nonnegative integer.`, `MATLAB:${fname}:InvalidN`);
+    return n.re[0];
+  };
+  reg.set('strncmp', { fn: (args) => { const n = strnArgs(args, 'strncmp'); return [strCompare(args, false, n)]; } });
+  reg.set('strncmpi', { fn: (args) => { const n = strnArgs(args, 'strncmpi'); return [strCompare(args, true, n)]; } });
+
+  // Character classes, for isstrprop and its shortcuts. A non-char input
+  // is all false (isstrprop of numbers tests their codes, as MATLAB does).
+  const CHAR_CLASSES = {
+    alpha: (c) => /\p{L}/u.test(c), alphanum: (c) => /[\p{L}\p{Nd}]/u.test(c), digit: (c) => /[0-9]/.test(c),
+    lower: (c) => /\p{Ll}/u.test(c), upper: (c) => /\p{Lu}/u.test(c), wspace: (c) => /[ \t\n\v\f\r\u0085\u00a0\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\u1680]/.test(c),
+    punct: (c) => /[!-\/:-@\[-`{-~\u00a1-\u00bf]/.test(c), cntrl: (c) => /[\x00-\x1f\x7f]/.test(c),
+    graphic: (c) => /[^\s\x00-\x1f\x7f-\x9f]/.test(c) && c !== ' ', print: (c) => /[^\x00-\x1f\x7f-\x9f]/.test(c),
+    xdigit: (c) => /[0-9a-fA-F]/.test(c),
+  };
+  const classify = (v, test, numbersToo) => {
+    const out = Mat.zeros(v.rows, v.cols); out.isLogical = true;
+    if (v.isChar || numbersToo) for (let k = 0; k < v.numel; k++) out.re[k] = test(String.fromCharCode(v.re[k])) ? 1 : 0;
+    return out;
+  };
+  const charClassFn = (cls) => ({ fn: (args) => [args[0] instanceof Mat ? classify(args[0], CHAR_CLASSES[cls], false) : Mat.logicalScalar(false)] });
+  reg.set('isspace', charClassFn('wspace'));
+  reg.set('isletter', charClassFn('alpha'));
+  reg.set('isstrprop', {
+    fn: (args) => {
+      const [v, c] = args;
+      const cls = c instanceof Mat && c.isChar ? c.toJSString() : '';
+      if (!CHAR_CLASSES[cls]) throw new MatlabError(`Invalid category '${cls}': must be one of alpha, alphanum, cntrl, digit, graphic, lower, print, punct, wspace, upper or xdigit.`);
+      if (v instanceof Cell) return [new Cell(v.rows, v.cols, v.data.map(x => x instanceof Mat ? classify(x, CHAR_CLASSES[cls], true) : Mat.logicalScalar(false)))];
+      if (!(v instanceof Mat)) throw new MatlabError(`Undefined function 'isstrprop' for input arguments of type '${valueClassName(v)}'.`, 'MATLAB:UndefinedFunction');
+      return [classify(v, CHAR_CLASSES[cls], true)];
+    },
+  });
+  // blanks(n): n spaces. deblank: trailing whitespace and nulls removed
+  // (from a char matrix, the columns blank in every row).
+  reg.set('blanks', {
+    fn: (args) => {
+      const n = args[0];
+      if (!(n instanceof Mat) || n.numel !== 1 || n.isComplex || !(n.re[0] >= 0) || !Number.isInteger(n.re[0])) throw new MatlabError('N must be a non-negative integer.', 'MATLAB:blanks:invalidInput');
+      return [Mat.fromString(' '.repeat(n.re[0]))];
+    },
+  });
+  reg.set('deblank', {
+    fn: (args) => [eachText(args[0], 'deblank', (m) => {
+      if (!m.isChar) { if (m.isEmpty) return m; throw new MatlabError('Input must be a string or cell array of strings.', 'MATLAB:deblank:NonStringInput'); }
+      let keep = m.cols;
+      const blank = (c) => c === 0 || CHAR_CLASSES.wspace(String.fromCharCode(c));
+      while (keep > 0 && Array.from({ length: m.rows }, (_, r) => m.re[(keep - 1) * m.rows + r]).every(blank)) keep--;
+      if (keep === m.cols) return m;
+      if (keep === 0) return new Mat(m.rows === 1 ? 1 : m.rows, 0, new Float64Array(0), null, { isChar: true });
+      return new Mat(m.rows, keep, m.re.slice(0, keep * m.rows), null, { isChar: true });
+    })],
+  });
   // upper/lower keep the shape of a char array, map a cell array of text
   // element by element and return other numeric input unchanged.
   const changeCase = (fname, upper) => ({

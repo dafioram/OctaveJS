@@ -400,5 +400,50 @@ const isLogical = (interp, name) => interp.workspace.get(name).isLogical;
   check('hypot of complex input', v('h'), 5);
 }
 
+// ---- fixes from the second MATLAB R2015a reference run ----
+{
+  const { interp, run } = makeInterp();
+  const w = (name) => interp.workspace.get(name);
+  const arr = (name) => Array.from(w(name).re);
+  const size = (name) => [w(name).rows, w(name).cols];
+  run("v = (1:5)'; r = v([2 4; 1 3]); A = magic(3); A(5) = []; m = magic(2);");
+  check('matrix index shapes a vector result', [size('r'), arr('r')], [[2, 2], [2, 1, 4, 3]]);
+  check('deleting from a matrix leaves a row', size('A'), [1, 8]);
+  check('magic(2) is [1 3; 4 2]', arr('m'), [1, 4, 3, 2]);
+  checkThrows('deleting past the end', () => run('x = 1:3; x(5) = [];'), /^Matrix index is out of range for deletion\.$/);
+  checkThrows('null assignment with two indices', () => run('A = magic(3); A(2, 2) = [];'), /^A null assignment can have only one non-colon index\.$/);
+  checkThrows('assignment size mismatch', () => run('A = magic(3); A([1 2], :) = [1 2 3];'), /size of the left side is 2-by-3 and the size of the right side is 1-by-3/);
+  checkThrows('operator on a cell', () => run('x = {1} + 1;'), /^Operator '\+' is not supported for operands of type 'cell'\.$/);
+  run("p = [4 1; 1 3] ^ 0.5; q = 2 ^ [1 2; 3 4]; z = 1i^2; d = det(magic(4)); n = NaN^0; t = atan(1i);");
+  checkClose('A^0.5 by eigendecomposition', arr('p'), [1.9815776331353157, 0.27083220609417946, 0.27083220609417946, 1.7107454270411364], 1e-12);
+  checkClose('scalar^matrix', arr('q'), [10.482739389628648, 21.227818242480954, 14.151878828320633, 31.710557632109609], 1e-10);
+  check('1i^2 is real -1', [arr('z'), w('z').im], [[-1], null]);
+  checkClose('det from LU, as MATLAB', arr('d'), [-1.4495071809506048e-12], 1e-25);
+  check('NaN^0 is NaN', Number.isNaN(w('n').re[0]), true);
+  check('atan(1i) is Inf*1i', [arr('t'), Array.from(w('t').im)], [[0], [Infinity]]);
+  checkThrows('matrix^matrix', () => run('[1 2; 3 4] ^ [1 2];'), /Incorrect dimensions for raising a matrix to a power/);
+  run("e1 = eps(1e10); e2 = eps(Inf); a0 = atan2(0, -0); dd = dot([1 2; 3 4], [1 2; 3 4]); s1 = sprintf('%d', 'a'); s2 = num2str(1e16);");
+  check('eps(x)', [w('e1').re[0], Number.isNaN(w('e2').re[0])], [2 ** -19, true]);
+  check('atan2(0, -0) is 0', arr('a0'), [0]);
+  check('dot of matrices works by column', arr('dd'), [10, 20]);
+  check("sprintf('%d', 'a') prints the code", interp.workspace.get('s1').toJSString(), '97');
+  check('num2str(1e16)', interp.workspace.get('s2').toJSString(), '1e+16');
+  run("[u, i] = unique([3 1 3 2], 'last'); [ur, ir, jr] = unique([1 2; 1 2; 3 4], 'rows'); sp = regexp('a1b2', '\\d', 'split'); sc = strcat({'a '}, 'b ');");
+  check("unique 'last'", arr('i'), [2, 4, 3]);
+  check("unique 'rows'", [arr('ur'), arr('ir'), arr('jr')], [[1, 3, 2, 4], [1, 3], [1, 1, 2]]);
+  const sp = interp.workspace.get('sp');
+  check('regexp split: an empty piece is 0x0', [sp.data[2].rows, sp.data[2].cols], [0, 0]);
+  check('strcat trims char arguments next to a cell', interp.workspace.get('sc').data[0].toJSString(), 'a b');
+  run("c1 = strcat([4 -2; 1 3], 1); c2 = strcat(0); un = union('ab', NaN); x = +'ab'; g = diag('ab');");
+  check('strcat of a char matrix keeps its rows', size('c1'), [2, 3]);
+  check('strcat drops trailing nulls', size('c2'), [1, 0]);
+  check('union of char and NaN sorts char(0) first', arr('un'), [0, 97, 98]);
+  check("+'ab' is double", [w('x').isChar, arr('x')], [false, [97, 98]]);
+  check('diag keeps char', interp.workspace.get('g').isChar, true);
+  checkThrows('cell2mat of mixed types', () => run("cell2mat({1, 'a'});"), /same data type/);
+  checkThrows('cell of a char', () => run("cell('a');"), /Conversion to cell from char/);
+  checkThrows('ones with a bad class name', () => run("ones(2, 'foo');"), /CLASSNAME/);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

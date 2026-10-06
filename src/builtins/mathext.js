@@ -78,6 +78,7 @@ function magicSquare(n) {
       M[i + p][j] = S[i][j] + 3 * p * p;
       M[i + p][j + p] = S[i][j] + p * p;
     }
+    if (n === 2) return M; // MATLAB's magic(2) is [1 3; 4 2], with no swaps
     const k = (n - 2) / 4;
     const cols = [];
     for (let j = 1; j <= k; j++) cols.push(j);
@@ -85,8 +86,7 @@ function magicSquare(n) {
     const swap = (r, c) => { const t = M[r - 1][c - 1]; M[r - 1][c - 1] = M[r + p - 1][c - 1]; M[r + p - 1][c - 1] = t; };
     for (let i = 1; i <= p; i++) for (const c of cols) swap(i, c);
     const i = k + 1;
-    // MATLAB's M([i; i+p], [1 i]) = M([i+p; i], [1 i]): a repeated column
-    // (when i = 1, for n = 2) is swapped once, not twice.
+    // MATLAB's M([i; i+p], [1 i]) = M([i+p; i], [1 i]).
     for (const c of new Set([1, i])) swap(i, c);
   }
   return M;

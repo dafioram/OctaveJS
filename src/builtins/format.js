@@ -90,6 +90,7 @@ export function doSprintf(fmt, valueList) {
   if (specs.length === 0 || specs.every(m => m[4] === '%')) return fmt.replace(/%%/g, '%');
   let out = '';
   let vi = 0;
+  valueList = valueList.slice();
   const anyValues = valueList.length > 0;
   do {
     let last = 0;
@@ -105,7 +106,14 @@ export function doSprintf(fmt, valueList) {
       const prec = precSpec === '*' ? Math.round(Number(valueList[vi++]) || 0) : precSpec !== undefined ? parseInt(precSpec, 10) : null;
       let left = flags.includes('-');
       if (width < 0) { left = true; width = -width; }
-      let piece = convert(conv, valueList[vi++], prec, flags);
+      // Text meets a numeric (or %c) conversion one character at a time:
+      // sprintf('%d', 'ab') is '9798'.
+      let value = valueList[vi];
+      if (typeof value === 'string' && conv !== 's' && value.length > 0) {
+        if (value.length > 1) valueList[vi] = value.slice(1); else vi++;
+        value = conv === 'c' ? value[0] : value.charCodeAt(0);
+      } else vi++;
+      let piece = convert(conv, value, prec, flags);
       if (piece.length < width) {
         const zeroPad = flags.includes('0') && !left && !'sc'.includes(conv) && /^[+ -]?[0-9]/.test(piece);
         if (left) piece = piece.padEnd(width);
@@ -159,7 +167,9 @@ export function num2strDefault(a) {
   if (a.isEmpty) return new Mat(0, 0, new Float64Array(0), null, { isChar: true });
   const vals = Array.from(a.re);
   const finite = vals.filter(Number.isFinite);
-  const isInt = vals.every(v => !Number.isFinite(v) || Number.isInteger(v));
+  const finiteMax = Math.max(0, ...vals.filter(Number.isFinite).map(Math.abs));
+  // Integers print in full below 1e15; larger ones use %g like other values.
+  const isInt = finiteMax < 1e15 && vals.every(v => !Number.isFinite(v) || Number.isInteger(v));
   const fmtReal = (v, digits) => (Number.isFinite(v) ? (isInt ? String(v) : genForm(Math.abs(v), digits).replace(/^/, v < 0 ? '-' : '')) : nonFinite(v));
   const maxAbs = finite.length ? Math.max(...finite.map(Math.abs)) : 0;
   const digits = Math.min(Math.max((maxAbs > 0 ? Math.floor(Math.log10(maxAbs)) : 0) + 5, 5), 16);

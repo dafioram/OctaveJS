@@ -109,7 +109,7 @@ functions: `ismissing`, `rmmissing`, `fillmissing` (`'constant'`,
 where real MATLAB does, e.g. `sqrt(-1)`, `asin(2)`; `complex(a, b)`); `sum`, `prod`, `mean`,
 `median`, `std`, `var`, `min`/`max` (with index output), `range`, `mode`,
 `cumsum`, `cumprod` — all with a dimension argument and, where MATLAB has
-them, the `'all'` and `'omitnan'`/`'includenan'` options; `sort` (with index output, `'ascend'`/`'descend'`), `unique`,
+them, the `'all'` and `'omitnan'`/`'includenan'` options; `sort` (with index output, `'ascend'`/`'descend'`), `unique` (`'rows'`, `'stable'`, `'first'`/`'last'`),
 `find` (linear or `[row,col]`/`[row,col,val]` forms, with optional count
 and `'first'`/`'last'`), `any`, `all`, `isnan`, `isinf`, `isfinite`;
 `fliplr`, `flipud`, `flip`, `repmat`, `cat`/`horzcat`/`vertcat`, `permute`, `squeeze`; `size`,
@@ -165,27 +165,32 @@ extrapolation), `interp2` (`'linear'`, `'nearest'`, `'cubic'`,
 `gt`, `le`, `ge`, `uminus`, `uplus` (so `cellfun(@plus, a, b)` works);
 `bsxfun`.
 
-**Strings:** `strcmp`, `strcmpi` (both also compare element-wise against
-a cell array of strings), `upper`, `lower`, `strtrim`, `strrep`,
+**Strings:** `strcmp`, `strcmpi`, `strncmp`, `strncmpi` (all also compare
+element-wise against a cell array of strings), `upper`, `lower`, `strtrim`,
+`deblank`, `blanks`, `isspace`, `isletter`, `isstrprop`, `strrep`,
 `strsplit`, `strjoin`, `strcat`, `strfind`, `contains`, `startsWith`,
 `endsWith`, `regexp`/`regexpi` (all seven outputs — `'match'`,
 `'tokens'`, `'names'`, `'split'`, … — and `'once'`), `regexprep`,
 `num2str` (including a format argument), `int2str`, `str2double`,
 `str2num` (evaluates the string as a MATLAB expression through this same
-interpreter — no different in kind from any other code you run here);
+interpreter — no different in kind from any other code you run here),
+`dec2bin`/`bin2dec`, `dec2hex`/`hex2dec`, `dec2base`/`base2dec`;
+`eval` (including `eval(try, catch)` and `[a, b] = eval(expr)`) and
+`str2func` run text through the same interpreter;
 `sort` and `unique` accept cell arrays of strings. Regular expressions
 run on JavaScript's engine, which agrees with MATLAB on the common syntax
 (classes, quantifiers, groups, lookaround, `(?<name>...)`); MATLAB's `\<`
 and `\>` word anchors are translated.
 
 **Timing & display:** `tic`/`toc` (including `t = tic; toc(t)`), `format
-long`/`format short`.
+short`/`long`/`short g`/`long g`/`short e`/`long e` (column widths as
+MATLAB prints them); `eps(x)`, `realmax`, `realmin`, `flintmax`.
 
 **Cells & structs:** `cell`, `iscell`, `iscellstr`, `cellfun` and
 `arrayfun` (including `'UniformOutput', false` and multiple outputs),
 `num2cell`, `cell2mat`, `cellstr`, `struct` (cell-valued arguments make
 struct arrays), `fieldnames`, `isfield`, `rmfield`, `isstruct`,
-`getfield`, `setfield`, `struct2cell`, `numfields`.
+`getfield`, `setfield`, `struct2cell`, `numfields`, `orderfields`.
 
 **Errors:** `error` (message, format + args, or identifier + format),
 `warning` (including `warning('off', id)`), `assert`, `MException`,
@@ -258,7 +263,7 @@ there's a reasonable workaround, it's listed.
 | Double-quoted strings (`"hello"`, MATLAB string arrays) | Single-quoted char arrays: `'hello'` |
 | **General command syntax** for arbitrary/user-defined functions, e.g. calling your own `function foo(s)` as `foo bar` | Use the normal parenthesized form: `foo('bar')`. A small, fixed whitelist — `clear`, `hold`, `grid`, `axis`, `disp`, `format`, `box`, `legend`, `close`, `warning`, `xlim`, `ylim`, `zlim`, `colormap`, `colorbar`, `shading`, `clim`, `caxis`, `drawnow`, `pause`, `rng` — *does* support command syntax (`clear x y`, `hold on`, `grid off`, `axis equal`, `disp hello`, `format long`, `close all`, `legend off`, `colormap hot`, `shading interp`, `rng default`), since those are idiomatic and unambiguous enough to special-case safely; see the note below the table. |
 | N-D arrays (`zeros(2,2,3)`, `cat(3, A, B)`, `A(i,j,k) = v` with `k > 1`) — these give a clear error rather than a truncated result. Trailing singleton dimensions *are* accepted, as in MATLAB: `zeros(2,3,1)`, `A(:,:,1)`, `[r,c,p] = size(A)`, `size(A, 3)` (= 1), `sum(A, 3)`, `permute(A, [2 1])` | Reshape/index a 2-D matrix, or keep the pages in a cell array (`pages{k} = ...`) |
-| Integer classes (`int8`, `uint16`, ...) — everything is `double` (or tagged `logical`/`char`) | Just use `double`; a trailing class-name argument to `zeros`/`ones` (e.g. `zeros(3,'int8')`) is silently ignored |
+| Integer classes (`int8`, `uint16`, ...) — everything is `double` (or tagged `logical`/`char`) | Just use `double`; a trailing numeric class name to `zeros`/`ones`/`eye` (e.g. `zeros(3,'int8')`) is accepted and ignored |
 | Indexing after `()`, e.g. `x(2)(3)`, `magic(3)(2, 2)` or `x(2)(3) = 1` (MATLAB rejects these too; `s(2).f`, `c{2}(3)` and their assignments *are* supported) | Use an intermediate variable |
 | Other 3-D plot types (`quiver3`, `patch`, `fill3`, `waterfall`, ...), lighting (`light`, `lighting`, `material`) and `rotate3d` | `surf`/`mesh`/`plot3`/`scatter3`; drag the plot to rotate it in the Figures panel |
 | Saving figures as PDF or EPS, or printing to a printer | Save as SVG (vector) or PNG |
@@ -345,7 +350,9 @@ of test lock in behavior across the whole library:
   records what MATLAB returns for all of the above and more (about
   23,000 cases); the recording from MATLAB R2015a is checked in
   (`tools/matlab/reference/R2015a.txt`). The test compares MatWeb with it
-  case by case: about 17,500 cases match MATLAB exactly and are locked in,
+  case by case: about 18,000 cases (the library sweep plus about 370
+  language, indexing, formatting and error-message cases) match MATLAB
+  exactly and are locked in,
   and every remaining difference is listed with its reason in
   `R2015a-known.json` (mostly inputs MATLAB rejects and MatWeb accepts,
   and behavior that changed after R2015a, where MatWeb follows current
