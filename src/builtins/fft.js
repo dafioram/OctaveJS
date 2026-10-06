@@ -1,4 +1,4 @@
-// fft.js — FFT/IFFT, delegated to math.js (confirmed working for both
+// fft.js — FFT/IFFT (and fft2/ifft2, fftshift/ifftshift), delegated to math.js (confirmed working for both
 // power-of-two and arbitrary lengths during development).
 //
 // fft(X) transforms a vector, or each column of a matrix; fft(X, n) pads
@@ -41,7 +41,56 @@ function transform(args, fname, kernel) {
   return new Mat(outRows, outCols, re, anyIm ? im : null);
 }
 
+// Circular shift of x by k along dim (1 or 2), for fftshift/ifftshift.
+function shiftAlong(x, dim, k) {
+  const m = x.rows, n = x.cols;
+  const len = dim === 1 ? m : n;
+  if (len === 0) return x;
+  const s = ((k % len) + len) % len;
+  const out = new Mat(m, n, new Float64Array(x.numel), x.im ? new Float64Array(x.numel) : null, { isChar: x.isChar, isLogical: x.isLogical });
+  for (let c = 0; c < n; c++) {
+    for (let r = 0; r < m; r++) {
+      const dst = dim === 1 ? c * m + (r + s) % m : ((c + s) % n) * m + r;
+      out.re[dst] = x.re[c * m + r];
+      if (out.im) out.im[dst] = x.im[c * m + r];
+    }
+  }
+  return out;
+}
+// fftshift(X) | fftshift(X, dim): move the zero-frequency term to the
+// middle (both dimensions of a matrix); ifftshift undoes it.
+function centerShift(args, inverse) {
+  const x = args[0];
+  if (!(x instanceof Mat)) throw new MatlabError(`${inverse ? 'ifftshift' : 'fftshift'}: input must be numeric`);
+  const amount = (len) => (inverse ? -Math.floor(len / 2) : Math.floor(len / 2));
+  if (args.length >= 2) {
+    const d = Math.round(args[1].toScalarNumber());
+    if (d >= 3) return x;
+    return shiftAlong(x, d, amount(d === 1 ? x.rows : x.cols));
+  }
+  if (x.rows === 1 || x.cols === 1) {
+    const d = x.rows === 1 ? 2 : 1;
+    return shiftAlong(x, d, amount(x.numel));
+  }
+  return shiftAlong(shiftAlong(x, 1, amount(x.rows)), 2, amount(x.cols));
+}
+
 export function registerFFT(reg) {
   reg.set('fft', { fn: (args) => [transform(args, 'fft', (x) => math.fft(x))] });
   reg.set('ifft', { fn: (args) => [transform(args, 'ifft', (x) => math.ifft(x))] });
+  // fft2(X) | fft2(X, m, n): fft down the columns, then along the rows.
+  const twoD = (fname, kernel) => ({
+    fn: (args) => {
+      const x = args[0];
+      const m = args.length >= 3 ? args[1] : Mat.empty(), n = args.length >= 3 ? args[2] : Mat.empty();
+      if (args.length === 2) throw new MatlabError(`${fname}: expected ${fname}(X) or ${fname}(X, m, n)`);
+      if (x.isEmpty) return [x];
+      const cols = transform([x, m, Mat.scalar(1)], fname, kernel);
+      return [transform([cols, n, Mat.scalar(2)], fname, kernel)];
+    },
+  });
+  reg.set('fft2', twoD('fft2', (x) => math.fft(x)));
+  reg.set('ifft2', twoD('ifft2', (x) => math.ifft(x)));
+  reg.set('fftshift', { fn: (args) => [centerShift(args, false)] });
+  reg.set('ifftshift', { fn: (args) => [centerShift(args, true)] });
 }

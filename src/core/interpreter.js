@@ -1547,7 +1547,17 @@ function formatStruct(s) {
 // `style` is the `format` setting: 'short' shows 4 decimals; 'long' shows
 // about 16 significant digits (15 decimals below 10, fewer above).
 export function formatMat(mat, style = 'short') {
-  if (mat.isChar) return mat.toJSString();
+  if (mat.isChar) {
+    if (mat.rows <= 1) return mat.toJSString();
+    // A char matrix shows one row per line.
+    const lines = [];
+    for (let r = 0; r < mat.rows; r++) {
+      let line = '';
+      for (let c = 0; c < mat.cols; c++) line += String.fromCharCode(mat.re[c * mat.rows + r]);
+      lines.push(line);
+    }
+    return lines.join('\n');
+  }
   const long = style === 'long';
   const decimals = (mag) => (!long ? 4 : mag < 10 ? 15 : Math.max(15 - Math.floor(Math.log10(mag)), 1));
   const exp = (x) => fmtExp(x, long ? 15 : 4);

@@ -119,7 +119,29 @@ dimension arguments); `polyfit`, `polyval`, `roots`, `conv`, `deconv`,
 `filter`, `polyder`, `polyint`; `magic`, `meshgrid`, `ndgrid`,
 `diff`, `trapz`, `cumtrapz`, `circshift`, `sub2ind`/`ind2sub`;
 `factorial`, `nchoosek` (count or combinations), `primes`, `isprime`,
-`gcd`, `lcm`.
+`gcd`, `lcm`, `factor`, `perms`, `rat`, `rats`.
+
+**More elementary and special functions:** reciprocal trig (`sec`, `csc`,
+`cot` and inverses), all hyperbolic functions and their inverses,
+degree-based trig (`sind`, `cosd`, `tand`, ..., `atan2d`; exact at
+multiples of 90°), `deg2rad`/`rad2deg`, `log1p`, `expm1`, `nthroot`,
+`nextpow2`, `pow2`, `realsqrt`/`reallog`/`realpow`; `erf`, `erfc`,
+`erfcx`, `erfinv`, `erfcinv`, `gamma`, `gammaln`, `gammainc`, `psi`,
+`beta`, `betaln`, `betainc`.
+
+**Sets and sorting:** `intersect`, `union`, `setdiff`, `setxor` (index
+outputs, `'rows'`, `'stable'`, numbers or cellstr), `sortrows` (column
+list, negative columns descend), `issorted`, `rot90`.
+
+**Statistics and data analysis:** `cov`, `corrcoef` (with p-values),
+`prctile`, `quantile`, `histcounts` (MATLAB's automatic binning, `BinWidth`,
+`BinLimits`, `Normalization`, bin index output), `histc`, `discretize`,
+`accumarray`, `cummax`/`cummin`, moving statistics (`movmean`, `movsum`,
+`movmedian`, `movmax`, `movmin`, `movprod`, `movvar`, `movstd` with
+`'Endpoints'`), `normalize`, `rescale`, `bounds`, `vecnorm`.
+
+**Signal processing:** `fft2`/`ifft2`, `fftshift`/`ifftshift`, `conv2`
+(`'full'`/`'same'`/`'valid'`, separable form), `filter2`.
 
 **Solvers, integration and interpolation:** `ode45`, `ode23`
 (non-stiff; MATLAB's own Dormand-Prince / Bogacki-Shampine methods and
@@ -336,7 +358,9 @@ src/builtins/   elementwise.js, reduction.js, linalg.js, fft.js,
                 solvers), optim.js (fzero, fmin*, integral), interp.js
                 (interp1/2, spline, pchip), random.js (rand & co., rng),
                 format.js (sprintf/num2str/mat2str), missing.js (ismissing,
-                rmmissing, fillmissing),
+                rmmissing, fillmissing), specfun.js (erf, gamma,
+                beta families), sets.js (set operations, sortrows),
+                stats.js (cov, prctile, histcounts, mov*, ...),
                 numutil.js, index.js — the
                 function library, registered into the interpreter.
 src/mat5/       mat5.js — the MAT5 binary codec.
@@ -353,7 +377,7 @@ src/ui/         main.js, backend.js, vfs.js, matlab-lang.js, styles.css
                   fallback) backend, the IndexedDB file store, CodeMirror
                   setup, drawing figures with Plotly. Everything here is what actually
                   needs a browser; everything above it is plain, testable JS.
-test/           harness.js + ten test files — run with `npm test`.
+test/           harness.js + eleven test files — run with `npm test`.
 build.mjs       esbuild bundling script -> dist/ (main.js and worker.js).
 ```
 

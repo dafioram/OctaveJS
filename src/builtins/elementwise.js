@@ -117,4 +117,145 @@ export function registerElementwise(reg) {
   reg.set('rem', { fn: binaryReal((a, b) => { if (b === 0) return NaN; const r = a - Math.trunc(a / b) * b; return r; }) });
   reg.set('power', { fn: (args) => [Mat.broadcastBinary(args[0], args[1], C.cpow)] });
   reg.set('hypot', { fn: binaryReal((a, b) => Math.hypot(a, b)) });
+  registerMoreElementary(reg);
+}
+
+// ---------------- more elementary functions ----------------
+
+const recip = ([r, i]) => C.cdiv(1, 0, r, i);
+// Inverse hyperbolic functions over the complex plane, with MATLAB's branches.
+function casinh(r, i) { // log(z + sqrt(z^2 + 1))
+  const [zr, zi] = C.cmul(r, i, r, i);
+  const [sr, si] = C.csqrt(zr + 1, zi);
+  return C.clog(r + sr, i + si);
+}
+function cacosh(r, i) { // log(z + sqrt(z + 1) * sqrt(z - 1))
+  const [ar, ai] = C.csqrt(r + 1, i), [br, bi] = C.csqrt(r - 1, i);
+  const [pr, pi] = C.cmul(ar, ai, br, bi);
+  return C.clog(r + pr, i + pi);
+}
+function catanh(r, i) { // log((1 + z) / (1 - z)) / 2
+  const [qr, qi] = C.cdiv(1 + r, i, 1 - r, -i);
+  const [lr, li] = C.clog(qr, qi);
+  return [lr / 2, li / 2];
+}
+
+const DEG = Math.PI / 180;
+// MATLAB's sind/cosd/tand reduce the angle by multiples of 90 degrees
+// first, so sind(180) is exactly 0, cosd(90) is exactly 0 and
+// tand(90) is Inf.
+function quadrant(x) {
+  const n = Math.round(x / 90);
+  return { n: ((n % 4) + 4) % 4, rad: (x - n * 90) * DEG };
+}
+function sind(x) {
+  if (!Number.isFinite(x)) return NaN;
+  const { n, rad } = quadrant(x);
+  return [Math.sin(rad), Math.cos(rad), -Math.sin(rad), -Math.cos(rad)][n];
+}
+function cosd(x) {
+  if (!Number.isFinite(x)) return NaN;
+  const { n, rad } = quadrant(x);
+  return [Math.cos(rad), -Math.sin(rad), -Math.cos(rad), Math.sin(rad)][n];
+}
+function tand(x) {
+  if (!Number.isFinite(x)) return NaN;
+  const { n, rad } = quadrant(x);
+  if (n % 2 === 0) return Math.tan(rad);
+  if (rad === 0) return n === 1 ? Infinity : -Infinity;
+  return -1 / Math.tan(rad);
+}
+// Degree versions of complex arguments: the radian function of z*pi/180.
+const degIn = (f) => (r, i) => f(r * DEG, i * DEG);
+const degOut = (f) => (r, i) => { const [a, b] = f(r, i); return [a / DEG, b / DEG]; };
+
+function registerMoreElementary(reg) {
+  const set = (name, fn, realFn) => reg.set(name, { fn: unary(fn, realFn) });
+  // reciprocal trigonometric and hyperbolic functions
+  set('sec', (r, i) => recip(C.ccos(r, i)), (x) => 1 / Math.cos(x));
+  set('csc', (r, i) => recip(C.csin(r, i)), (x) => 1 / Math.sin(x));
+  set('cot', (r, i) => recip(C.ctan(r, i)), (x) => 1 / Math.tan(x));
+  set('asec', (r, i) => cacos(...recip([r, i])), (x) => (Math.abs(x) >= 1 || Number.isNaN(x) ? Math.acos(1 / x) : undefined));
+  set('acsc', (r, i) => casin(...recip([r, i])), (x) => (Math.abs(x) >= 1 || Number.isNaN(x) ? Math.asin(1 / x) : undefined));
+  set('acot', (r, i) => catan(...recip([r, i])), (x) => Math.atan(1 / x));
+  set('sech', (r, i) => recip(ccosh(r, i)), (x) => 1 / Math.cosh(x));
+  set('csch', (r, i) => recip(csinh(r, i)), (x) => 1 / Math.sinh(x));
+  set('coth', (r, i) => recip(ctanh(r, i)), (x) => 1 / Math.tanh(x));
+  set('asinh', casinh, Math.asinh);
+  set('acosh', cacosh, (x) => (x >= 1 || Number.isNaN(x) ? Math.acosh(x) : undefined));
+  set('atanh', catanh, inUnit(Math.atanh));
+  set('asech', (r, i) => cacosh(...recip([r, i])), (x) => (x > 0 && x <= 1) || Number.isNaN(x) ? Math.acosh(1 / x) : undefined);
+  set('acsch', (r, i) => casinh(...recip([r, i])), (x) => Math.asinh(1 / x));
+  set('acoth', (r, i) => catanh(...recip([r, i])), (x) => (Math.abs(x) >= 1 || Number.isNaN(x) ? Math.atanh(1 / x) : undefined));
+
+  // degree-based trigonometry
+  set('sind', degIn(C.csin), sind);
+  set('cosd', degIn(C.ccos), cosd);
+  set('tand', degIn(C.ctan), tand);
+  set('secd', (r, i) => recip(degIn(C.ccos)(r, i)), (x) => 1 / cosd(x));
+  set('cscd', (r, i) => recip(degIn(C.csin)(r, i)), (x) => 1 / sind(x));
+  set('cotd', (r, i) => recip(degIn(C.ctan)(r, i)), (x) => 1 / tand(x));
+  set('asind', degOut(casin), inUnit((x) => Math.asin(x) / DEG));
+  set('acosd', degOut(cacos), inUnit((x) => Math.acos(x) / DEG));
+  set('atand', degOut(catan), (x) => Math.atan(x) / DEG);
+  set('asecd', degOut((r, i) => cacos(...recip([r, i]))), (x) => (Math.abs(x) >= 1 || Number.isNaN(x) ? Math.acos(1 / x) / DEG : undefined));
+  set('acscd', degOut((r, i) => casin(...recip([r, i]))), (x) => (Math.abs(x) >= 1 || Number.isNaN(x) ? Math.asin(1 / x) / DEG : undefined));
+  set('acotd', degOut((r, i) => catan(...recip([r, i]))), (x) => Math.atan(1 / x) / DEG);
+  reg.set('atan2d', { fn: binaryReal((y, x) => Math.atan2(y, x) / DEG) });
+  set('deg2rad', (r, i) => [r * DEG, i * DEG]);
+  set('rad2deg', (r, i) => [r / DEG, i / DEG]);
+
+  // exponentials and logarithms
+  set('log1p', (r, i) => C.clog(1 + r, i), (x) => (x >= -1 || Number.isNaN(x) ? Math.log1p(x) : undefined));
+  set('expm1', (r, i) => { const [er, ei] = C.cexp(r, i); return [er - 1, ei]; }, Math.expm1);
+  // pow2(e) = 2.^e | pow2(f, e) = f .* 2.^e
+  reg.set('pow2', {
+    fn: (args) => {
+      if (args.length === 1) return [Mat.broadcastBinary(Mat.scalar(2), args[0], C.cpow)];
+      return [Mat.broadcastBinary(args[0], args[1], (fr, fi, er) => [fr * 2 ** er, fi * 2 ** er])];
+    },
+  });
+  // nextpow2(n): the smallest p with 2^p >= abs(n)
+  reg.set('nextpow2', {
+    fn: (args) => [Mat.mapElementwise(args[0], (r, i) => {
+      const a = Math.hypot(r, i);
+      if (a === 0) return [0, 0];
+      if (!Number.isFinite(a)) return [a, 0];
+      let p = Math.ceil(Math.log2(a));
+      while (2 ** (p - 1) >= a) p--;
+      while (2 ** p < a) p++;
+      return [p, 0];
+    })],
+  });
+  // nthroot(x, n): the real n-th root (negative x needs an odd n).
+  reg.set('nthroot', {
+    fn: (args) => {
+      if (args.length !== 2) throw new MatlabError('nthroot: expected nthroot(x, n)');
+      for (const v of args) if (v.isComplex && v.im.some(z => z !== 0)) throw new MatlabError('nthroot: both inputs must be real');
+      return [Mat.broadcastBinary(args[0], args[1], (x, _xi, n) => {
+        if (x < 0 && !(Number.isInteger(n) && Math.abs(n % 2) === 1)) throw new MatlabError('nthroot: if x is negative, n must be an odd integer');
+        if (x === 0 || !Number.isFinite(x) || !Number.isFinite(n)) {
+          if (Number.isNaN(x) || Number.isNaN(n)) return [NaN, 0];
+          return [Math.sign(x) * Math.abs(x) ** (1 / n), 0];
+        }
+        let y = Math.sign(x) * Math.abs(x) ** (1 / n);
+        // One Newton step makes exact roots exact (nthroot(27, 3) = 3), as MATLAB does.
+        const yn1 = y ** (n - 1);
+        if (Number.isFinite(yn1) && yn1 !== 0) y -= (y * yn1 - x) / (n * yn1);
+        return [y, 0];
+      })];
+    },
+  });
+  // realsqrt / reallog / realpow: error instead of returning complex results.
+  const realOnly = (name, fn) => reg.set(name, {
+    fn: (args) => {
+      const out = fn(args);
+      if (out.isComplex && out.im.some(z => z !== 0)) throw new MatlabError(`${name} produced complex result.`);
+      out.im = null;
+      return [out];
+    },
+  });
+  realOnly('realsqrt', (args) => Mat.mapElementwise(args[0], C.csqrt));
+  realOnly('reallog', (args) => Mat.mapElementwise(args[0], C.clog));
+  realOnly('realpow', (args) => Mat.broadcastBinary(args[0], args[1], C.cpow));
 }

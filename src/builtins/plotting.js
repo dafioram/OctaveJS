@@ -358,15 +358,19 @@ function takeFlags(args, flags) {
 
 // ---------------- histogram binning ----------------
 
+// MATLAB's "nice" bin width: the raw width rounded to 1, 2, 3, 5 or 10
+// times a power of ten.
 function niceWidth(raw) {
   if (!(raw > 0) || !Number.isFinite(raw)) return 1;
   const p = Math.pow(10, Math.floor(Math.log10(raw)));
-  const m = raw / p;
-  return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p;
+  const rel = raw / p;
+  return (rel < 1.5 ? 1 : rel < 2.5 ? 2 : rel < 4 ? 3 : rel < 7.5 ? 5 : 10) * p;
 }
 
-// Bin edges for histogram: explicit edges, a bin count, a bin width, or
-// automatic (Scott's rule rounded to a "nice" width, like MATLAB's 'auto').
+// Bin edges for histogram/histcounts: explicit edges, a bin count, a bin
+// width, or MATLAB's 'auto' rule: unit bins centered on the integers for
+// integer data spanning at most 50, otherwise Scott's rule
+// (3.5*std/n^(1/3)) rounded to a nice width.
 export function histogramEdges(data, { binEdges, numBins, binWidth } = {}) {
   if (binEdges) return binEdges;
   if (data.length === 0) return [0, 1];
@@ -377,15 +381,16 @@ export function histogramEdges(data, { binEdges, numBins, binWidth } = {}) {
   }
   let w = binWidth;
   if (!w) {
+    if (data.every(Number.isInteger) && mx - mn <= 50) {
+      return Array.from({ length: mx - mn + 2 }, (_, k) => mn - 0.5 + k);
+    }
     const n = data.length;
     const mean = data.reduce((s, v) => s + v, 0) / n;
     const sd = Math.sqrt(data.reduce((s, v) => s + (v - mean) ** 2, 0) / Math.max(n - 1, 1));
     w = niceWidth(sd > 0 ? 3.5 * sd / Math.cbrt(n) : 1);
   }
   const start = Math.floor(mn / w) * w;
-  let end = Math.ceil(mx / w) * w;
-  if (end <= start) end = start + w;
-  const nb = Math.max(1, Math.round((end - start) / w));
+  const nb = Math.max(1, Math.ceil((mx - start) / w));
   return Array.from({ length: nb + 1 }, (_, k) => start + k * w);
 }
 
@@ -400,7 +405,7 @@ export function histogramCounts(data, edges) {
   return counts;
 }
 
-function normalizeCounts(counts, edges, mode) {
+export function normalizeCounts(counts, edges, mode) {
   const n = counts.reduce((s, c) => s + c, 0) || 1;
   const width = (k) => edges[k + 1] - edges[k];
   let acc = 0;

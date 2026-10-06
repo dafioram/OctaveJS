@@ -23,6 +23,9 @@ import { registerOptim } from './optim.js';
 import { registerInterp } from './interp.js';
 import { registerRandom } from './random.js';
 import { registerMissing } from './missing.js';
+import { registerSpecfun } from './specfun.js';
+import { registerSets } from './sets.js';
+import { registerStats } from './stats.js';
 
 export function buildBuiltinsRegistry() {
   const reg = new Map();
@@ -46,5 +49,8 @@ export function buildBuiltinsRegistry() {
   registerInterp(reg);
   registerRandom(reg);
   registerMissing(reg);
+  registerSpecfun(reg);
+  registerSets(reg);
+  registerStats(reg);
   return reg;
 }

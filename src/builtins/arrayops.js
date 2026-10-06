@@ -6,11 +6,11 @@
 import { Mat, Cell, StructArray, MatlabError, shapeArgs, shape2D } from '../core/values.js';
 
 // Cell arrays of strings sort/unique by character codes (MATLAB's order).
-function cellstrValues(c, fname) {
+export function cellstrValues(c, fname) {
   if (!c.isCellstr()) throw new MatlabError(`${fname}: cell array input must contain only character vectors`);
   return c.data.map(v => v.toJSString());
 }
-const codeOrder = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
+export const codeOrder = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
 
 function tagLogical(mat) { mat.isLogical = true; return mat; }
 
@@ -119,7 +119,7 @@ function flipDim(mat, dim) {
 // 'real'); NaN (missing) values go last when ascending and first when
 // descending, unless MissingPlacement says otherwise. Ties keep their
 // original order.
-function sortComparator({ descending, nanFirst, byAbs }) {
+export function sortComparator({ descending, nanFirst, byAbs }) {
   const keys = (v) => (byAbs ? [Math.hypot(v.re, v.im), Math.atan2(v.im, v.re)] : [v.re, v.im]);
   return (x, y) => {
     const xNaN = Number.isNaN(x.re) || Number.isNaN(x.im), yNaN = Number.isNaN(y.re) || Number.isNaN(y.im);
