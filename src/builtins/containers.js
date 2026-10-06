@@ -121,6 +121,7 @@ export function registerContainers(reg) {
     fn: (args) => {
       const a = args[0];
       if (a instanceof Cell) return [a];
+      if (a instanceof FunctionHandle) return [new Cell(1, 1, [a])];
       return [new Cell(a.rows, a.cols, Array.from({ length: a.numel }, (_, k) => elementAt(a, k)))];
     },
   });

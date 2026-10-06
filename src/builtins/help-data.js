@@ -6,7 +6,6 @@
 export const HELP_DATA = new Map(Object.entries({
   // ---- constants ----
   pi: { syntax: 'pi', desc: 'Ratio of a circle\'s circumference to its diameter, 3.14159...' },
-  e: { syntax: 'e', desc: 'Euler\'s number, 2.71828...' },
   Inf: { syntax: 'Inf  |  Inf(n)  |  Inf(m, n)', desc: 'Positive infinity, or an array of it.' },
   NaN: { syntax: 'NaN  |  NaN(n)  |  NaN(m, n)', desc: 'Not-a-Number, the result of undefined operations like 0/0; NaN(m, n) is an array of NaNs.' },
   inf: { syntax: 'inf  |  inf(m, n)', desc: 'Same as Inf.' },
@@ -239,7 +238,6 @@ export const HELP_DATA = new Map(Object.entries({
   islogical: { syntax: 'tf = islogical(x)', desc: 'True if x is a logical array.' },
   isreal: { syntax: 'tf = isreal(x)', desc: 'True if x has no complex storage.' },
   iscomplex: { syntax: 'tf = iscomplex(x)', desc: 'True if x has complex storage.' },
-  is_function_handle: { syntax: 'tf = is_function_handle(x)', desc: 'True if x is a function handle.' },
   double: { syntax: 'y = double(x)', desc: 'Convert to plain double (strips char/logical tags; char keeps its codes as numbers).' },
   logical: { syntax: 'y = logical(x)', desc: "Convert to logical (nonzero -> true, zero -> false). NaN is an error (NaN's cannot be converted to logicals), as in MATLAB." },
   char: { syntax: 's = char(x)', desc: 'Convert numeric codes to a char array (string).' },

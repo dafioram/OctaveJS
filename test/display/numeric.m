@@ -1,0 +1,23 @@
+% Numbers: integers, decimals, scale factors, special values.
+x = 5
+y = -3.5
+z = pi
+b = 1e10
+s = 1e-5
+n = NaN
+v = [1 2 3]
+w = [1.5 2.25 -3]
+q = [1 NaN Inf -Inf]
+big = [1 1e5]
+mix = [1 1000.5]
+tiny = [0.001 0.002]
+M = magic(3)
+M4 = magic(4)
+F = [1.5 2; 3 4]
+E = eye(2)*1e6
+neg = [-1 -2.5]
+col = [1; -2; 3]
+wide = 1:25
+c1 = 1 + 2i
+c2 = [1+2i 3-4.5i]
+c3 = sqrt(-2)

@@ -3,7 +3,7 @@
 // minus, times, mtimes, eq, lt, ... (which MATLAB code passes around as
 // handles, e.g. cellfun(@plus, ...) or arrayfun(@times, ...)).
 
-import { Mat, Cell, StructArray, FunctionHandle, MatlabError, truthOf } from '../core/values.js';
+import { Mat, Cell, StructArray, FunctionHandle, MatlabError, argCountError, truthOf } from '../core/values.js';
 import { applyBinaryOp } from '../core/interpreter.js';
 
 // Deep equality as isequal defines it: same size and values, ignoring the
@@ -83,7 +83,7 @@ export function registerLogic(reg) {
 
   const binary = (op) => ({
     fn: (args, _n, ctx) => {
-      if (args.length !== 2) throw new MatlabError('Expected exactly 2 arguments');
+      if (args.length !== 2) throw argCountError(args.length, 2);
       if (!(args[0] instanceof Mat) || !(args[1] instanceof Mat)) throw new MatlabError(`Operator '${op}' is only defined for numeric, logical and char arrays`);
       return [ctx.interp.reportWarnings(applyBinaryOp(op, args[0], args[1]))];
     },

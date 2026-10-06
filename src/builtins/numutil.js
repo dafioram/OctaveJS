@@ -23,6 +23,15 @@ export function funcCaller(ctx, f, fname, extra = []) {
   };
 }
 
+// A size or count argument (magic(n), parula(m), primes(n), ...): a
+// finite real scalar, so Inf or NaN can't turn into an endless loop or a
+// huge allocation.
+export function finiteScalarArg(v, fname, what = 'the size') {
+  const n = v.toScalarNumber();
+  if (!Number.isFinite(n)) throw new MatlabError(`${fname}: ${what} must be a finite number`);
+  return n;
+}
+
 // A real scalar from a function's return value.
 export function realScalar(v, fname) {
   if (v.numel !== 1) throw new MatlabError(`${fname}: the function must return a scalar value (got ${v.sizeStr()})`);

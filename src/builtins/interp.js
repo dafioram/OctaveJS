@@ -371,6 +371,7 @@ function stripLeading(p) {
 }
 const derivative = (p) => (p.length <= 1 ? [0] : p.slice(0, -1).map((c, i) => c * (p.length - 1 - i)));
 function conv(a, b) {
+  if (a.length === 0 || b.length === 0) return [];
   const out = new Array(a.length + b.length - 1).fill(0);
   a.forEach((x, i) => b.forEach((y, j) => { out[i + j] += x * y; }));
   return out;

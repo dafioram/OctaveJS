@@ -145,6 +145,7 @@ export function registerArrayOps(reg) {
       }
       if (n !== null) positions = dir === 'last' ? positions.slice(-n) : positions.slice(0, n);
       const isRow = a.rows === 1;
+      if (a.rows === 0 && a.cols === 0) return Array.from({ length: Math.max(1, nargout) }, () => Mat.empty());
       if (nargout >= 2) {
         const rows = new Float64Array(positions.length), cols = new Float64Array(positions.length);
         positions.forEach((p, i) => { rows[i] = (p % a.rows) + 1; cols[i] = Math.floor(p / a.rows) + 1; });

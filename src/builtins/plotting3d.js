@@ -13,6 +13,7 @@ import { Mat, MatlabError } from '../core/values.js';
 import { plotKit } from './plotting.js';
 import { COLORMAPS, DEFAULT_COLORMAP_SIZE, colorDataRange } from '../plot/colormaps.js';
 import { parseLinespec, markerFromText, colorFromText } from '../plot/style.js';
+import { finiteScalarArg } from './numutil.js';
 
 const {
   isText, textOf, values, handlesMat, currentFigure, currentAxes, prepareAxes, nextHandle, touch,
@@ -274,7 +275,7 @@ export function registerPlotting3d(reg) {
   for (const name of Object.keys(COLORMAPS)) {
     reg.set(name, {
       fn: (args) => {
-        const n = args.length ? Math.round(args[0].toScalarNumber()) : DEFAULT_COLORMAP_SIZE;
+        const n = args.length ? Math.round(finiteScalarArg(args[0], name, 'the number of colors')) : DEFAULT_COLORMAP_SIZE;
         if (!(n >= 0)) throw new MatlabError(`${name}: the number of colors must be non-negative`);
         return [n === 0 ? Mat.zeros(0, 3) : Mat.fromRows(COLORMAPS[name](n))];
       },
@@ -372,10 +373,13 @@ export function registerPlotting3d(reg) {
         if (X.isVector && Y.isVector) {
           const xv = values(X), yv = values(Y);
           x = yv.map(() => xv.slice()); y = yv.map(v => xv.map(() => v));
-        } else { x = rowsOf(X); y = rowsOf(Y); }
+        } else {
+          if (X.rows !== Y.rows || X.cols !== Y.cols) throw new MatlabError('peaks: X and Y must be vectors or matrices of the same size');
+          x = rowsOf(X); y = rowsOf(Y);
+        }
       } else {
         const n = args.length ? args[0] : Mat.scalar(49);
-        const v = n.isScalar ? linspace(-3, 3, Math.round(n.re[0])) : values(n);
+        const v = n.isScalar ? linspace(-3, 3, Math.max(0, Math.round(finiteScalarArg(n, 'peaks')))) : values(n);
         x = v.map(() => v.slice()); y = v.map(w => v.map(() => w));
       }
       const z = peaksGrid(x, y);
@@ -387,7 +391,7 @@ export function registerPlotting3d(reg) {
   // [X, Y, Z] = sphere(n) (unit sphere, (n+1)-by-(n+1)) | sphere (plots it)
   reg.set('sphere', {
     fn: (args, nargout, ctx) => {
-      const n = args.length ? Math.round(args[0].toScalarNumber()) : 20;
+      const n = args.length ? Math.round(finiteScalarArg(args[0], 'sphere')) : 20;
       if (!(n >= 2)) throw new MatlabError('sphere: n must be at least 2');
       const theta = linspace(-Math.PI, Math.PI, n + 1), phi = linspace(-Math.PI / 2, Math.PI / 2, n + 1);
       const X = phi.map(p => theta.map(t => Math.cos(p) * Math.cos(t)));

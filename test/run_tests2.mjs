@@ -177,10 +177,10 @@ function checkThrowsMsg(label, fn, substr) {
 {
   const { run } = makeInterp();
   checkThrowsMsg('double-quoted strings rejected', () => run('x = "hello";'), 'single quotes');
-  checkThrowsMsg('brace indexing an undefined name', () => run('c{1};'), 'Undefined');
+  checkThrowsMsg('brace indexing an undefined name', () => run('c{1};'), "Unrecognized function or variable 'c'.");
   checkThrowsMsg('third subscript past a 2-D array', () => run('A=[1 2;3 4]; A(1,1,2);'), 'position 3 exceeds array bounds');
   checkThrowsMsg('N-D assignment rejected', () => run('A=[1 2;3 4]; A(1,1,2) = 1;'), 'N-D array');
-  checkThrowsMsg('chained ()() assignment rejected', () => run('f(1)(2) = 3;'), '()-indexing must appear last');
+  checkThrowsMsg('chained ()() assignment rejected', () => run('f(1)(2) = 3;'), "must appear as the last operation");
 }
 
 // ---------------- semicolon suppression at top level (regression test:

@@ -48,10 +48,11 @@ than a marketing description.
   esbuild to bundle `src/ui/main.js` and everything it imports —
   math.js, Plotly, Papa Parse, CodeMirror 6 — into `dist/main.js`, with
   `dist/index.html` and `dist/styles.css` copied alongside it).
-- **Running the interpreter's own test suite:** `npm test` (about 420
-  assertions covering the language core, builtins, cells/structs,
-  try/catch, copy-on-write semantics, the worker protocol, plotting, file
-  I/O, the MAT5 codec, and MATLAB-compatibility regressions; see `test/`).
+- **Running the interpreter's own test suite:** `npm test` (fifteen test
+  files: about 1,700 checks plus a 60,000-call sweep of every builtin,
+  under a minute; see `test/` and
+  [Testing](#testing) below). `npm run coverage` adds a code-coverage
+  report (`coverage/index.html`).
 
 ## What's implemented
 
@@ -258,11 +259,11 @@ there's a reasonable workaround, it's listed.
 | **General command syntax** for arbitrary/user-defined functions, e.g. calling your own `function foo(s)` as `foo bar` | Use the normal parenthesized form: `foo('bar')`. A small, fixed whitelist — `clear`, `hold`, `grid`, `axis`, `disp`, `format`, `box`, `legend`, `close`, `warning`, `xlim`, `ylim`, `zlim`, `colormap`, `colorbar`, `shading`, `clim`, `caxis`, `drawnow`, `pause`, `rng` — *does* support command syntax (`clear x y`, `hold on`, `grid off`, `axis equal`, `disp hello`, `format long`, `close all`, `legend off`, `colormap hot`, `shading interp`, `rng default`), since those are idiomatic and unambiguous enough to special-case safely; see the note below the table. |
 | N-D arrays (`zeros(2,2,3)`, `cat(3, A, B)`, `A(i,j,k) = v` with `k > 1`) — these give a clear error rather than a truncated result. Trailing singleton dimensions *are* accepted, as in MATLAB: `zeros(2,3,1)`, `A(:,:,1)`, `[r,c,p] = size(A)`, `size(A, 3)` (= 1), `sum(A, 3)`, `permute(A, [2 1])` | Reshape/index a 2-D matrix, or keep the pages in a cell array (`pages{k} = ...`) |
 | Integer classes (`int8`, `uint16`, ...) — everything is `double` (or tagged `logical`/`char`) | Just use `double`; a trailing class-name argument to `zeros`/`ones` (e.g. `zeros(3,'int8')`) is silently ignored |
-| `()` followed by more indexing in an assignment, e.g. `x(2)(3) = 1` (MATLAB rejects this too; `s(2).f = 1` and `c{2}(3) = 1` *are* supported) | Use an intermediate variable |
+| Indexing after `()`, e.g. `x(2)(3)`, `magic(3)(2, 2)` or `x(2)(3) = 1` (MATLAB rejects these too; `s(2).f`, `c{2}(3)` and their assignments *are* supported) | Use an intermediate variable |
 | Other 3-D plot types (`quiver3`, `patch`, `fill3`, `waterfall`, ...), lighting (`light`, `lighting`, `material`) and `rotate3d` | `surf`/`mesh`/`plot3`/`scatter3`; drag the plot to rotate it in the Figures panel |
 | Saving figures as PDF or EPS, or printing to a printer | Save as SVG (vector) or PNG |
 | Full handle graphics (every property, `delete`, `findobj`, `uicontrol`, ...) | The `set`/`get` properties listed above; `axis square` is accepted but has no effect |
-| Complex-matrix `rank`/`svd` | `rank(real(A))` as an approximation, or avoid complex inputs |
+| `[U, S, V] = svd(A)` and `rank` of a complex matrix (`svd(A)`, `norm` and `cond` work) | `rank(real(A))` as an approximation, or avoid complex inputs |
 | Saving cell arrays or structs to `.mat` | They're skipped with a note; save their numeric contents as separate variables |
 | `classdef` classes, `containers.Map`, tables | Structs and cell arrays |
 
@@ -303,10 +304,48 @@ assuming — two gaps turned out to matter:
   MATLAB's `mldivide` uses, particularly for ill-conditioned or
   nearly-rank-deficient `A`. It's fine for typical well-posed
   overdetermined systems.
-- `eig`, `lu` (via `lup`), `qr`, `fft`/`ifft` were all confirmed working
-  correctly against math.js directly, including complex eigenvalues and
-  non-power-of-two FFT lengths — no wrapper limitations there worth
-  noting beyond the general ones above (2-D only, etc.)
+- **`eig` of nonsymmetric matrices, `lu` and `fft` are our own.** The
+  test suite's property checks found that math.js's `eigs` can fail to
+  converge (e.g. on the companion matrix `roots` builds for a degree-15
+  polynomial) and starts its eigenvector iteration from random vectors,
+  so `[V, D] = eig(A)` changed sign from run to run; its `lup`
+  permutation made `P*A = L*U` fail beyond 2-by-2; and its FFT was
+  O(n^2) for lengths that aren't powers of two (`fft2` of a 1000-by-1000
+  grid took over 100 seconds) and lost accuracy (1e-9 relative error at
+  n = 1023). Nonsymmetric `eig` now uses EISPACK's Hessenberg QR
+  algorithm (`orthes`/`hqr2`, via JAMA, with balancing), giving MATLAB's
+  eigenvalue order and unit-norm eigenvectors; `lu` is LAPACK-style
+  partial pivoting (also rectangular, complex and `'vector'`); `fft` is
+  radix-2 with Bluestein's algorithm for other lengths, O(n log n) and
+  accurate to about 1e-13. Symmetric `eig`, complex `eig`, `qr`,
+  `expm`, `sqrtm` and `pinv` still use math.js.
+
+## Testing
+
+`npm test` runs fifteen files. Besides the per-feature tests, five kinds
+of test lock in behavior across the whole library:
+
+- **Robustness sweep** (`run_tests12.mjs`): every registered builtin is
+  called with about 140 awkward argument lists (empty, NaN, Inf, complex,
+  char, logical, cell, struct, function handles, wrong argument counts).
+  Each call must return well-formed values or raise a MATLAB error. It
+  must not leak a JavaScript exception, change its arguments, share
+  memory with them or take more than a second. New builtins are covered
+  automatically.
+- **Behavior contracts** (`run_tests13.mjs`, data in
+  `contracts-data.mjs`): the class, size and value MATLAB gives for about
+  270 calls, plus MATLAB's exact error messages for common mistakes.
+- **Display snapshots** (`run_tests14.mjs`): the command-window output of
+  the scripts in `test/display/` must match the saved `.out` files. After
+  an intended display change, `node test/run_tests14.mjs --update`
+  rewrites them; review the diff.
+- **Property tests** (`run_tests15.mjs`): identities checked on seeded
+  random inputs of many sizes, such as `ifft(fft(x)) == x`, `P*A == L*U`,
+  `U*S*V' == A`, `A*V == V*D`, the set identities and text round trips.
+- **Real MATLAB** (`tools/matlab/`): `matweb_reference.m` records what
+  MATLAB returns for all of the above (about 26,000 cases), and
+  `compare-reference.mjs` lists every difference from MatWeb. See
+  `tools/matlab/README.md`.
 
 ## The `.mat` file: what "rudimentary" means here
 
@@ -377,7 +416,10 @@ src/ui/         main.js, backend.js, vfs.js, matlab-lang.js, styles.css
                   fallback) backend, the IndexedDB file store, CodeMirror
                   setup, drawing figures with Plotly. Everything here is what actually
                   needs a browser; everything above it is plain, testable JS.
-test/           harness.js + eleven test files — run with `npm test`.
+test/           harness.js + fifteen test files, contracts-data.mjs and
+                display/ snapshots — run with `npm test` (see Testing).
+tools/matlab/   matweb_reference.m and the scripts that generate it and
+                compare MatWeb against its output from real MATLAB.
 build.mjs       esbuild bundling script -> dist/ (main.js and worker.js).
 ```
 

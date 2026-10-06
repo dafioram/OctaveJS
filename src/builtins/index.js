@@ -27,12 +27,27 @@ import { registerSpecfun } from './specfun.js';
 import { registerSets } from './sets.js';
 import { registerStats } from './stats.js';
 
+// Minimum argument counts: a call with fewer raises MATLAB's "Not enough
+// input arguments." before the builtin runs. (Calls with no arguments at
+// all are caught generically; see runBuiltin in interpreter.js.)
+const MIN_ARGS = {
+  circshift: 2, colon: 2, conv: 2, cross: 2, dot: 2, gcd: 2, isa: 2, kron: 2, lcm: 2,
+  linspace: 2, logspace: 2, nchoosek: 2, polyfit: 3, polyval: 2, power: 2, realpow: 2,
+  strrep: 3, sub2ind: 2, ind2sub: 2, squeeze: 1, writematrix: 2,
+};
+
+// Registers a module's builtins as numeric-only: a cell, struct or function
+// handle argument (every argument, or just the first) raises MATLAB's
+// "Undefined function 'f' for input arguments of type 'cell'." up front,
+// rather than reaching code that would misread it.
+const numericOnly = (reg, which) => ({ set: (name, spec) => reg.set(name, { ...spec, numericArgs: which }) });
+
 export function buildBuiltinsRegistry() {
   const reg = new Map();
-  registerElementwise(reg);
-  registerReduction(reg);
+  registerElementwise(numericOnly(reg, 'all'));
+  registerReduction(numericOnly(reg, 'first'));
   registerLinalg(reg); // also registers the \, /, ^ backend hooks
-  registerFFT(reg);
+  registerFFT(numericOnly(reg, 'all'));
   registerSystem(reg);
   registerPlotting(reg);
   registerPlotting3d(reg);
@@ -49,8 +64,9 @@ export function buildBuiltinsRegistry() {
   registerInterp(reg);
   registerRandom(reg);
   registerMissing(reg);
-  registerSpecfun(reg);
+  registerSpecfun(numericOnly(reg, 'all'));
   registerSets(reg);
-  registerStats(reg);
+  registerStats(numericOnly(reg, 'first'));
+  for (const [name, n] of Object.entries(MIN_ARGS)) reg.get(name).minArgs = n;
   return reg;
 }

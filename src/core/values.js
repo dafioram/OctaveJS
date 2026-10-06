@@ -33,6 +33,11 @@ export class MatlabError extends Error {
   }
 }
 
+// MATLAB's error for a call with the wrong number of arguments.
+export function argCountError(got, expected) {
+  return got < expected ? new MatlabError('Not enough input arguments.', 'MATLAB:minrhs') : new MatlabError('Too many input arguments.', 'MATLAB:TooManyInputs');
+}
+
 // [rows, cols] from a list of dimension sizes (a size vector or separate
 // size arguments). Trailing singleton dimensions are allowed, as in
 // MATLAB (zeros(2, 3, 1) is 2-by-3); anything else would be an N-D array.
@@ -74,6 +79,12 @@ export function release(v) { if (v && typeof v === 'object' && '_refs' in v && v
 
 export class Mat {
   constructor(rows, cols, re, im = null, opts = {}) {
+    // A malformed array (from an argument a builtin didn't expect) fails
+    // here, where the builtin's error guard can report it, rather than
+    // surfacing later as a confusing display or indexing error.
+    if (!(rows >= 0 && cols >= 0 && Number.isInteger(rows) && Number.isInteger(cols)) || !re || re.length !== rows * cols || (im && im.length !== re.length)) {
+      throw new TypeError(`malformed ${rows}x${cols} array`);
+    }
     this.rows = rows;
     this.cols = cols;
     this.re = re; // Float64Array, column-major, length rows*cols
@@ -215,7 +226,7 @@ export class Mat {
   static broadcastBinary(a, b, fn) {
     const rows = expandDim(a.rows, b.rows), cols = expandDim(a.cols, b.cols);
     if (rows < 0 || cols < 0) {
-      throw new MatlabError(`Arrays have incompatible sizes for this operation (${a.sizeStr()} and ${b.sizeStr()})`, 'MATLAB:sizeDimensionsMustMatch');
+      throw new MatlabError('Arrays have incompatible sizes for this operation.', 'MATLAB:sizeDimensionsMustMatch');
     }
     const n = rows * cols;
     const re = new Float64Array(n);

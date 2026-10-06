@@ -5,6 +5,7 @@
 
 import { Mat, Cell, MatlabError } from '../core/values.js';
 import * as C from '../core/cmath.js';
+import { finiteScalarArg } from './numutil.js';
 
 // MATLAB's default dimension: the first one whose size isn't 1.
 function firstDim(m) { return m.rows !== 1 ? 1 : 2; }
@@ -105,7 +106,7 @@ function requireIntegers(m, fname) {
 export function registerMathExt(reg) {
   reg.set('magic', {
     fn: (args) => {
-      const n = Math.round(args[0].toScalarNumber());
+      const n = Math.round(finiteScalarArg(args[0], 'magic'));
       if (n < 1) return [Mat.empty()];
       return [Mat.fromRows(magicSquare(n))];
     },
@@ -190,6 +191,7 @@ export function registerMathExt(reg) {
       const a = args[0];
       let dr = 0, dc = 0;
       const k = args[1];
+      if (!(k instanceof Mat) || !Array.from(k.re).every(Number.isFinite)) throw new MatlabError('circshift: shift amounts must be finite integers');
       if (args.length >= 3) {
         const d = dimArg(args[2]);
         if (d === 1) dr = Math.round(k.toScalarNumber()); else if (d === 2) dc = Math.round(k.toScalarNumber());
@@ -250,7 +252,8 @@ export function registerMathExt(reg) {
 
   function sizePair(sz) {
     if (sz.numel < 2) throw new MatlabError('Size vector must have at least two elements');
-    return [Math.round(sz.re[0]), Math.round(sz.re[1])];
+    if (!Array.from(sz.re).every(v => Number.isInteger(v) && v >= 0)) throw new MatlabError('Size vector must contain non-negative integers');
+    return [sz.re[0], sz.re[1]];
   }
   reg.set('sub2ind', {
     fn: (args) => {
@@ -319,7 +322,7 @@ export function registerMathExt(reg) {
   reg.set('nchoosek', {
     fn: (args) => {
       const v = requireReal(args[0], 'nchoosek');
-      const k = Math.round(args[1].toScalarNumber());
+      const k = Math.round(finiteScalarArg(args[1], 'nchoosek', 'K'));
       if (v.isScalar) {
         const n = v.re[0];
         if (!Number.isInteger(n) || n < 0 || k < 0 || k > n) throw new MatlabError('nchoosek: N and K must be non-negative integers with K <= N');
@@ -342,7 +345,7 @@ export function registerMathExt(reg) {
 
   reg.set('primes', {
     fn: (args) => {
-      const n = Math.floor(args[0].toScalarNumber());
+      const n = Math.floor(finiteScalarArg(args[0], 'primes', 'the limit'));
       if (n < 2) return [Mat.zeros(1, 0)];
       const sieve = new Uint8Array(n + 1);
       const out = [];

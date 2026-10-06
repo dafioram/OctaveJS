@@ -395,6 +395,7 @@ export function histogramEdges(data, { binEdges, numBins, binWidth } = {}) {
 }
 
 export function histogramCounts(data, edges) {
+  if (edges.length < 2) throw new MatlabError('Bin edges must contain at least two values.');
   const counts = new Array(edges.length - 1).fill(0);
   for (const v of data) {
     if (v < edges[0] || v > edges[edges.length - 1]) continue;
@@ -877,7 +878,7 @@ export function registerPlotting(reg) {
       else if (nums.length === 2 && nums[1].isScalar && !nums[0].isScalar) { y = nums[0]; width = nums[1].re[0]; }
       else if (nums.length >= 2) { x = nums[0]; y = nums[1]; if (nums.length >= 3) width = nums[2].toScalarNumber(); }
       else throw new MatlabError(`${fname}: not enough input arguments`);
-      const series = y.isVector ? [values(y)] : columns(y);
+      const series = y.isVector || y.isEmpty ? [values(y)] : columns(y);
       const n = series[0].length;
       const xv = x ? values(x) : indexVector(n);
       if (xv.length !== n) throw new MatlabError(`${fname}: X must have one value per bar`);
@@ -975,7 +976,7 @@ export function registerPlotting(reg) {
       if (nums.length === 1) y = nums[0];
       else if (nums.length === 2) [x, y] = nums;
       else throw new MatlabError('area: expected area(Y) or area(X, Y)');
-      const series = y.isVector ? [values(y)] : columns(y);
+      const series = y.isVector || y.isEmpty ? [values(y)] : columns(y);
       const xv = x ? values(x) : indexVector(series[0].length);
       const ax = prepareAxes(ctx, 'cartesian');
       const group = nextHandle(ctx.interp);
