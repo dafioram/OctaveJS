@@ -233,7 +233,8 @@ export function registerStats(reg) {
       const betainc = (x, a, b) => ctx.interp.builtins.get('betainc').fn([Mat.scalar(x), Mat.scalar(a), Mat.scalar(b)])[0].re[0];
       for (let i = 0; i < p; i++) {
         for (let j = 0; j < p; j++) {
-          const r = i === j ? (Number.isNaN(C.re[i * p + i]) ? NaN : 1) : C.re[j * p + i] / Math.sqrt(C.re[i * p + i] * C.re[j * p + j]);
+          // A zero or NaN variance gives NaN, as MATLAB (corrcoef(5) is NaN).
+          const r = i === j ? (C.re[i * p + i] > 0 ? 1 : NaN) : C.re[j * p + i] / Math.sqrt(C.re[i * p + i] * C.re[j * p + j]);
           R.re[j * p + i] = Math.max(-1, Math.min(1, r)) || (Number.isNaN(r) ? NaN : 0);
           P.re[j * p + i] = i === j ? 1 : corrPValue(R.re[j * p + i], cols[0].length, betainc);
         }

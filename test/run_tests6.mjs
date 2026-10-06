@@ -159,7 +159,7 @@ const mat = (rows2d) => {
   run("f1 = strfind('abcabc', 'bc'); f2 = strfind('aaa', 'aa'); f3 = strfind({'ab', 'b'}, 'b'); f4 = strfind('abc', 'z');");
   check('strfind', [fmtVar(interp, 'f1'), fmtVar(interp, 'f2')], [row(2, 5), row(1, 2)]);
   check('strfind over a cell', interp.workspace.get('f3').data.map(v => v.re[0]), [2, 1]);
-  check('strfind no match is empty', fmtVar(interp, 'f4'), { rows: 1, cols: 0, re: [], im: null });
+  check('strfind no match is empty', fmtVar(interp, 'f4'), { rows: 0, cols: 0, re: [], im: null });
   run("c1 = contains('hello', 'ell'); c2 = contains({'apple', 'kiwi'}, {'pp', 'zz'}); c3 = startsWith('Hello', 'he', 'IgnoreCase', true); c4 = startsWith('Hello', 'he'); c5 = endsWith({'a.m', 'b.txt'}, '.m');");
   check('contains/startsWith/endsWith', ['c1', 'c2', 'c3', 'c4', 'c5'].map(n => fmtVar(interp, n)), [1, row(1, 0), 1, 0, row(1, 0)]);
   run("[tok, mt] = regexp('x=12, y=345', '(\\w)=(\\d+)', 'tokens', 'match'); t22 = tok{2}{2}; m1 = mt{1};");
@@ -177,7 +177,7 @@ const mat = (rows2d) => {
   check('regexpi', interp.workspace.get('ri').data[0].toJSString(), 'B');
   run("i1 = int2str(2.7); i2 = int2str(-2.5); n1 = num2str(pi, '%10.5f'); n2 = num2str([1 2 3], '%d,'); n3 = num2str('abc');");
   check('int2str rounds', [fmtVar(interp, 'i1'), fmtVar(interp, 'i2')], ['3', '-3']);
-  check('num2str with a format', [fmtVar(interp, 'n1'), fmtVar(interp, 'n2'), fmtVar(interp, 'n3')], ['   3.14159', '1,2,3,', 'abc']);
+  check('num2str with a format', [fmtVar(interp, 'n1'), fmtVar(interp, 'n2'), fmtVar(interp, 'n3')], ['3.14159', '1,2,3,', 'abc']);
 }
 
 // ---------------- tic/toc and format ----------------
@@ -193,7 +193,7 @@ const mat = (rows2d) => {
   check('format long scalar', show('format long; x = pi'), 'x =\n   3.141592653589793\n');
   check('format long vector', show('y = [1 2.5]'), 'y =\n   1.000000000000000   2.500000000000000\n');
   check('format long e-notation', show('z = 1e10'), 'z =\n   1.000000000000000e+10\n');
-  check('format (no argument) restores short', show('format; x = pi'), 'x =\n   3.1416\n');
+  check('format (no argument) restores short', show('format; x = pi'), 'x =\n    3.1416\n');
   checkThrows('unknown format style', () => run('format bank'), /unsupported style/);
 }
 

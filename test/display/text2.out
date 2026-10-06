@@ -1,0 +1,53 @@
+>> a = 'a'
+a =
+a
+>> b = ['ab'; 'cd']
+b =
+ab
+cd
+>> c = ''''
+c =
+'
+>> d = {'ab', 1; [], {}}
+d =
+  2x2 cell array
+
+    {'ab'}          {[1]}
+    {0x0 double}    {0x0 cell}
+>> e = {[1 2 3], 'long text here'; true, @sin}
+e =
+  2x2 cell array
+
+    {[1 2 3]}    {'long text here'}
+    {[1]}        {@sin}
+>> f = true(2)
+f =
+     1     1
+     1     1
+>> g = [true; false]
+g =
+     1
+     0
+>> h = 'tab	in'
+h =
+tab	in
+>> k = {}
+k =
+  0x0 empty cell array
+>> m = cell(2, 1)
+m =
+  2x1 cell array
+
+    {0x0 double}
+    {0x0 double}
+>> n = {''}
+n =
+  1x1 cell array
+
+    {0x0 char}
+>> p = num2str(pi)
+p =
+3.1416
+>> q = repmat('-', 1, 10)
+q =
+----------

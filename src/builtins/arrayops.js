@@ -3,7 +3,7 @@
 // matrix concatenation (which the interpreter already does for `[A B]`
 // and `[A;B]` — these just expose that as callable functions).
 
-import { Mat, Cell, StructArray, MatlabError, shapeArgs, shape2D } from '../core/values.js';
+import { Mat, Cell, StructArray, MatlabError, shapeArgs, shape2D, selectElements } from '../core/values.js';
 
 // Cell arrays of strings sort/unique by character codes (MATLAB's order).
 export function cellstrValues(c, fname) {
@@ -94,24 +94,11 @@ function permuteArray(a, orderArg, fname, inverse) {
   return new Mat(rows, cols, re, im, { isChar: a.isChar, isLogical: a.isLogical });
 }
 
-function flipDim(mat, dim) {
-  const out = mat.clone();
-  if (dim === 2) {
-    for (let c = 0; c < mat.cols; c++) {
-      const srcCol = mat.cols - 1 - c;
-      for (let r = 0; r < mat.rows; r++) {
-        out.setLin(c * mat.rows + r, mat.re[srcCol * mat.rows + r], mat.isComplex ? mat.im[srcCol * mat.rows + r] : 0);
-      }
-    }
-  } else {
-    for (let r = 0; r < mat.rows; r++) {
-      const srcRow = mat.rows - 1 - r;
-      for (let c = 0; c < mat.cols; c++) {
-        out.setLin(c * mat.rows + r, mat.re[c * mat.rows + srcRow], mat.isComplex ? mat.im[c * mat.rows + srcRow] : 0);
-      }
-    }
-  }
-  return out;
+// A flipped along dimension dim (1 or 2), for any kind of array.
+function flipDim(a, dim) {
+  const m = a.rows, n = a.cols, positions = [];
+  for (let c = 0; c < n; c++) for (let r = 0; r < m; r++) positions.push(dim === 2 ? (n - 1 - c) * m + r : c * m + (m - 1 - r));
+  return selectElements(a, m, n, positions);
 }
 
 // Comparator for sort, following MATLAB: complex arrays sort by abs and
@@ -145,7 +132,8 @@ export function registerArrayOps(reg) {
       }
       if (n !== null) positions = dir === 'last' ? positions.slice(-n) : positions.slice(0, n);
       const isRow = a.rows === 1;
-      if (a.rows === 0 && a.cols === 0) return Array.from({ length: Math.max(1, nargout) }, () => Mat.empty());
+      // No match in a 0x0 or scalar input gives [] (0x0), as MATLAB.
+      if ((a.rows === 0 && a.cols === 0) || (a.numel === 1 && positions.length === 0)) return Array.from({ length: Math.max(1, nargout) }, () => Mat.empty());
       if (nargout >= 2) {
         const rows = new Float64Array(positions.length), cols = new Float64Array(positions.length);
         positions.forEach((p, i) => { rows[i] = (p % a.rows) + 1; cols[i] = Math.floor(p / a.rows) + 1; });
@@ -177,7 +165,7 @@ export function registerArrayOps(reg) {
     fn: (args) => {
       const a = args[0];
       const dim = args.length >= 2 ? dimArg(args[1], 'flip') : (a.rows === 1 ? 2 : 1);
-      return [dim >= 3 ? a.clone() : flipDim(a, dim)]; // a 2-D array is a single page along dim 3+
+      return [dim >= 3 ? a : flipDim(a, dim)]; // a 2-D array is a single page along dim 3+
     },
   });
 
@@ -297,7 +285,7 @@ export function registerArrayOps(reg) {
         if (u.im !== 0) { if (!im) im = new Float64Array(n); im[pos] = u.im; }
       });
       for (let k = 0; k < ic.length; k++) ic[k] = rank.get(ic[k]) + 1;
-      const asRow = a.rows === 1 && a.numel > 0;
+      const asRow = a.rows === 1; // a 1x0 input gives 1x0, as MATLAB
       const C = new Mat(asRow ? 1 : n, asRow ? n : 1, re, im, { isChar: a.isChar, isLogical: a.isLogical });
       const out = [C];
       if (nargout >= 2) out.push(new Mat(n, 1, ia));
@@ -306,26 +294,16 @@ export function registerArrayOps(reg) {
     },
   });
 
+  // repmat(A, n) | repmat(A, m, n) | repmat(A, [m n]), for any kind of
+  // array (cells and structs too).
   reg.set('repmat', {
     fn: (args) => {
       const a = args[0];
-      if (args.length < 2) throw new MatlabError('repmat: expected repmat(A, n), repmat(A, m, n) or repmat(A, [m n])');
-      const [m, n] = shapeArgs(args.slice(1), 'repmat');
-      const rows = a.rows * m, cols = a.cols * n;
-      const re = new Float64Array(rows * cols);
-      const im = a.isComplex ? new Float64Array(rows * cols) : null;
-      for (let bi = 0; bi < m; bi++) {
-        for (let bj = 0; bj < n; bj++) {
-          for (let r = 0; r < a.rows; r++) {
-            for (let c = 0; c < a.cols; c++) {
-              const dr = bi * a.rows + r, dc = bj * a.cols + c;
-              re[dc * rows + dr] = a.re[c * a.rows + r];
-              if (im) im[dc * rows + dr] = a.im[c * a.rows + r];
-            }
-          }
-        }
-      }
-      return [new Mat(rows, cols, re, im, { isChar: a.isChar, isLogical: a.isLogical })];
+      if (args.length < 2) throw new MatlabError('Not enough input arguments.', 'MATLAB:minrhs');
+      const [m, n] = args.length === 2 && args[1].isEmpty ? [1, 1] : shapeArgs(args.slice(1), 'repmat');
+      const rows = a.rows * m, cols = a.cols * n, positions = [];
+      for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) positions.push((c % a.cols) * a.rows + (r % a.rows));
+      return [selectElements(a, rows, cols, positions)];
     },
   });
 

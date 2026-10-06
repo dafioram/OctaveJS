@@ -3,9 +3,9 @@
 // factorial, nchoosek, primes, isprime, gcd, lcm, roots, conv, deconv,
 // filter.
 
-import { Mat, Cell, MatlabError } from '../core/values.js';
+import { Mat, Cell, MatlabError, selectElements } from '../core/values.js';
 import * as C from '../core/cmath.js';
-import { finiteScalarArg } from './numutil.js';
+import { finiteScalarArg, linearOnParts } from './numutil.js';
 
 // MATLAB's default dimension: the first one whose size isn't 1.
 function firstDim(m) { return m.rows !== 1 ? 1 : 2; }
@@ -21,6 +21,7 @@ function requireReal(m, fname) {
   if (m.isComplex) throw new MatlabError(`${fname}: complex input is not supported`);
   return m;
 }
+
 
 // Calls fn(get, set, len) once per line of `m` along `dim` (each column for
 // dim 1, each row for dim 2), where get(k)/set(k, v) address the line's
@@ -106,7 +107,8 @@ function requireIntegers(m, fname) {
 export function registerMathExt(reg) {
   reg.set('magic', {
     fn: (args) => {
-      const n = Math.round(finiteScalarArg(args[0], 'magic'));
+      // The first element, truncated: magic(2.5) is 2-by-2, magic('ab') is 97-by-97.
+      const n = Math.trunc(finiteScalarArg(args[0].numel ? new Mat(1, 1, args[0].re.slice(0, 1)) : args[0], 'magic'));
       if (n < 1) return [Mat.empty()];
       return [Mat.fromRows(magicSquare(n))];
     },
@@ -114,33 +116,41 @@ export function registerMathExt(reg) {
 
   // [X, Y] = meshgrid(x, y): X repeats x across rows, Y repeats y down
   // columns (size numel(y)-by-numel(x)); ndgrid is the transposed layout.
+  // [X, Y] = meshgrid(x, y): X repeats x across rows, Y repeats y down
+  // columns (size numel(y)-by-numel(x)); ndgrid is the transposed layout,
+  // and ndgrid(x) with one output is x(:). Built from the elements of x
+  // and y, so their class (char, logical, complex, cell) carries over.
   const grid = (transposed) => (args, nargout) => {
-    const x = vectorValues(args[0]);
-    const y = args.length >= 2 ? vectorValues(args[1]) : x;
-    const rows = transposed ? x.length : y.length, cols = transposed ? y.length : x.length;
-    const X = Mat.zeros(rows, cols), Y = Mat.zeros(rows, cols);
-    for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) {
-      X.re[c * rows + r] = transposed ? x[r] : x[c];
-      Y.re[c * rows + r] = transposed ? y[c] : y[r];
-    }
-    return nargout >= 2 ? [X, Y] : [X];
+    const x = args[0], y = args.length >= 2 ? args[1] : args[0];
+    if (transposed && args.length === 1 && nargout <= 1) return [selectElements(x, x.numel, 1, Array.from({ length: x.numel }, (_, k) => k))];
+    if (!transposed && (x.numel === 0 || y.numel === 0)) return [Mat.empty(), Mat.empty()].slice(0, Math.max(1, nargout)); // meshgrid of an empty vector is []
+    const rows = transposed ? x.numel : y.numel, cols = transposed ? y.numel : x.numel;
+    const xs = [], ys = [];
+    for (let c = 0; c < cols; c++) for (let r = 0; r < rows; r++) { xs.push(transposed ? r : c); ys.push(transposed ? c : r); }
+    const X = selectElements(x, rows, cols, xs);
+    return nargout >= 2 ? [X, selectElements(y, rows, cols, ys)] : [X];
   };
   reg.set('meshgrid', { fn: grid(false) });
   reg.set('ndgrid', { fn: grid(true) });
 
+  // diff(X) | diff(X, n) | diff(X, n, dim). Without dim, each pass works
+  // along the first non-singleton dimension of the previous result (so
+  // diff([4 -2; 1 3], 2) is 1x1), and a scalar's difference is [].
   reg.set('diff', {
-    fn: (args) => {
-      let m = requireReal(args[0], 'diff');
-      const order = args.length >= 2 && !args[1].isEmpty ? Math.round(args[1].toScalarNumber()) : 1;
-      const dim = args.length >= 3 ? dimArg(args[2]) : firstDim(m);
+    fn: (args) => [linearOnParts(args, 0, (a) => {
+      let m = requireReal(a[0], 'diff');
+      const order = a.length >= 2 && !a[1].isEmpty ? Math.round(a[1].toScalarNumber()) : 1;
+      const fixedDim = a.length >= 3 ? dimArg(a[2]) : null;
       for (let pass = 0; pass < order; pass++) {
+        if (!fixedDim && m.numel === 1) return Mat.empty();
+        const dim = fixedDim || firstDim(m);
         const len = dim === 1 ? m.rows : dim === 2 ? m.cols : 1;
         m = forEachLine(m, dim, Math.max(len - 1, 0), (get, set, n) => {
           for (let k = 0; k + 1 < n; k++) set(k, get(k + 1) - get(k));
         });
       }
-      return [m];
-    },
+      return m;
+    })],
   });
 
   // trapz(Y), trapz(X, Y), trapz(Y, dim), trapz(X, Y, dim); cumtrapz likewise.
@@ -162,25 +172,28 @@ export function registerMathExt(reg) {
     }
     return { y, dim, len, spacing };
   }
+  // The argument holding Y (trapz(Y), trapz(Y, dim), trapz(X, Y, ...)).
+  const yIndex = (args) => (args.length >= 3 || (args.length === 2 && !(args[1].isScalar && !args[0].isScalar)) ? 1 : 0);
   reg.set('trapz', {
-    fn: (args) => {
-      const { y, dim, spacing } = trapzArgs(args);
-      return [forEachLine(y, dim, 1, (get, set, n) => {
+    fn: (args) => [linearOnParts(args, yIndex(args), (a) => {
+      const { y, dim, spacing } = trapzArgs(a);
+      if (a.length === 1 && y.rows === 0 && y.cols === 0) return Mat.scalar(0); // trapz([]) is 0
+      return forEachLine(y, dim, 1, (get, set, n) => {
         let s = 0;
         for (let k = 0; k + 1 < n; k++) s += spacing(k) * (get(k) + get(k + 1)) / 2;
         set(0, s);
-      })];
-    },
+      });
+    })],
   });
   reg.set('cumtrapz', {
-    fn: (args) => {
-      const { y, dim, len, spacing } = trapzArgs(args);
-      return [forEachLine(y, dim, dim >= 3 ? 1 : len, (get, set, n) => {
+    fn: (args) => [linearOnParts(args, yIndex(args), (a) => {
+      const { y, dim, len, spacing } = trapzArgs(a);
+      return forEachLine(y, dim, dim >= 3 ? 1 : len, (get, set, n) => {
         let s = 0;
         if (n > 0) set(0, 0);
         for (let k = 0; k + 1 < n; k++) { s += spacing(k) * (get(k) + get(k + 1)) / 2; set(k + 1, s); }
-      })];
-    },
+      });
+    })],
   });
 
   // circshift(A, k): shift along the first non-singleton dimension;
@@ -191,7 +204,7 @@ export function registerMathExt(reg) {
       const a = args[0];
       let dr = 0, dc = 0;
       const k = args[1];
-      if (!(k instanceof Mat) || !Array.from(k.re).every(Number.isFinite)) throw new MatlabError('circshift: shift amounts must be finite integers');
+      if (!(k instanceof Mat) || k.isChar || k.isComplex || !Array.from(k.re).every(Number.isInteger)) throw new MatlabError('Invalid shift type: must be a real finite integer vector.', 'MATLAB:circshift:InvalidShiftType');
       if (args.length >= 3) {
         const d = dimArg(args[2]);
         if (d === 1) dr = Math.round(k.toScalarNumber()); else if (d === 2) dc = Math.round(k.toScalarNumber());
@@ -289,8 +302,9 @@ export function registerMathExt(reg) {
   reg.set('mode', {
     fn: (args, nargout) => {
       const a = requireReal(args[0], 'mode');
-      if (a.isEmpty) return nargout >= 2 ? [Mat.scalar(NaN), Mat.scalar(0)] : [Mat.scalar(NaN)];
       const dim = args.length >= 2 ? dimArg(args[1]) : firstDim(a);
+      // mode([]) is NaN; an empty dimension gives NaN per line (mode(zeros(0, 3)) is 1x3).
+      if (a.rows === 0 && a.cols === 0 && args.length < 2) return nargout >= 2 ? [Mat.scalar(NaN), Mat.scalar(0)] : [Mat.scalar(NaN)];
       const freq = [];
       const M = forEachLine(a, dim, 1, (get, set, n) => {
         const counts = new Map();
@@ -515,21 +529,18 @@ export function registerMathExt(reg) {
       const v = args[0];
       const n = v.numel;
       if (n > 11) throw new MatlabError('perms: too many elements (the result would have more than 11! rows)');
-      const rows = [];
-      const idx = Array.from({ length: n }, (_, i) => i);
-      const rec = (prefix, rest) => {
-        if (rest.length === 0) { rows.push(prefix); return; }
-        for (let i = rest.length - 1; i >= 0; i--) rec([...prefix, rest[i]], [...rest.slice(0, i), ...rest.slice(i + 1)]);
+      // MATLAB's order: perms(1:n) = [n perms(1:n-1)] followed, for
+      // i = n-1 down to 1, by [i perms(1:n-1) with i replaced by n].
+      const indexPerms = (k) => {
+        if (k <= 1) return [Array.from({ length: k }, (_, i) => i + 1)];
+        const q = indexPerms(k - 1);
+        const out = q.map(row => [k, ...row]);
+        for (let i = k - 1; i >= 1; i--) out.push(...q.map(row => [i, ...row.map(x => (x === i ? k : x))]));
+        return out;
       };
-      rec([], idx);
+      const rows = n === 0 ? [[]] : indexPerms(n).map(row => row.map(x => x - 1));
       const R = rows.length;
-      if (v instanceof Cell) return [new Cell(R, n, Array.from({ length: R * n }, (_, k) => v.data[rows[k % R][Math.floor(k / R)]]))];
-      const out = new Mat(R, n, new Float64Array(R * n), v.im ? new Float64Array(R * n) : null, { isChar: v.isChar, isLogical: v.isLogical });
-      for (let c = 0; c < n; c++) for (let r = 0; r < R; r++) {
-        out.re[c * R + r] = v.re[rows[r][c]];
-        if (out.im) out.im[c * R + r] = v.im[rows[r][c]];
-      }
-      return [out];
+      return [selectElements(v, R, n, Array.from({ length: R * n }, (_, k) => rows[k % R][Math.floor(k / R)]))];
     },
   });
 
@@ -559,14 +570,12 @@ export function registerMathExt(reg) {
       if (nargout >= 2) {
         return [new Mat(X.rows, X.cols, Float64Array.from(results, r => r.N)), new Mat(X.rows, X.cols, Float64Array.from(results, r => r.D))];
       }
-      // The expansion as text: 3 + 1/(7 + 1/16)
+      if (X.isEmpty) return [Mat.empty()];
+      // The expansion as text, one row per element (column order), as
+      // MATLAB writes it: 3 + 1/(7 + 1/(16)).
       const lines = results.map(({ terms }) => {
         if (!Number.isFinite(terms[0])) return Number.isNaN(terms[0]) ? 'NaN' : terms[0] > 0 ? 'Inf' : '-Inf';
-        // The innermost term is bare unless negative: 3 + 1/(7 + 1/16), 1 + 1/(-4).
-        const last = terms[terms.length - 1];
-        let s = last < 0 ? `(${last})` : String(last);
-        for (let k = terms.length - 2; k >= 0; k--) s = `${terms[k]} + 1/${k === terms.length - 2 ? s : `(${s})`}`;
-        return s;
+        return String(terms[0]) + terms.slice(1).map(t => ` + 1/(${t}`).join('') + ')'.repeat(terms.length - 1);
       });
       const width = Math.max(0, ...lines.map(l => l.length));
       const m = new Mat(lines.length, width, new Float64Array(lines.length * width).fill(32), null, { isChar: true });
@@ -574,23 +583,31 @@ export function registerMathExt(reg) {
       return [m];
     },
   });
-  // rats(X) | rats(X, strlen): 'N/D' text for each element, right-aligned
-  // in fields of strlen characters (default 13).
+  // rats(X) | rats(X, strlen): 'N/D' text for each element, centered in
+  // fields of strlen + 1 characters (strlen defaults to 13).
   reg.set('rats', {
     fn: (args) => {
       const X = requireReal(args[0], 'rats');
-      const strlen = args.length >= 2 ? Math.round(args[1].toScalarNumber()) : 13;
+      if (X.isEmpty) return [new Mat(0, 0, new Float64Array(0), null, { isChar: true })];
+      const strlen = args.length >= 2 ? Math.max(1, Math.round(args[1].toScalarNumber()) || 1) : 13;
       const tol = 1e-6 * Array.from(X.re).filter(Number.isFinite).reduce((s, v) => s + Math.abs(v), 0);
       const fmt = (x) => {
-        if (Number.isNaN(x)) return 'NaN';
-        if (!Number.isFinite(x)) return x > 0 ? 'Inf' : '-Inf';
+        if (Number.isNaN(x)) return '0/0';
+        if (!Number.isFinite(x)) return x > 0 ? '1/0' : '-1/0';
         const { N, D } = ratTerms(x, Math.max(tol / Math.max(X.numel, 1), Math.abs(x) * 1e-10));
-        return D === 1 ? String(N) : `${N}/${D}`;
+        const s = D === 1 ? String(N) : `${N}/${D}`;
+        return s.length > strlen ? '*' : s;
+      };
+      // Each value centered in a field of strlen + 1 characters, the odd
+      // blank on the left, as MATLAB's rats does.
+      const field = (s) => {
+        const pad = strlen + 1 - s.length;
+        return ' '.repeat(Math.max(0, Math.ceil(pad / 2))) + s + ' '.repeat(Math.max(0, Math.floor(pad / 2)));
       };
       const lines = [];
       for (let r = 0; r < X.rows; r++) {
         let line = '';
-        for (let c = 0; c < X.cols; c++) line += fmt(X.re[c * X.rows + r]).padStart(strlen) + ' ';
+        for (let c = 0; c < X.cols; c++) line += field(fmt(X.re[c * X.rows + r]));
         lines.push(line);
       }
       const width = Math.max(0, ...lines.map(l => l.length));

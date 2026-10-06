@@ -132,6 +132,18 @@ export function flattenArgsForPrintf(args) {
 }
 
 // A char matrix from lines of text (shorter lines padded with blanks).
+// Text as a char value; empty text is 0x0, as MATLAB's text functions
+// return it.
+export function textValue(s) {
+  return s === '' ? new Mat(0, 0, new Float64Array(0), null, { isChar: true }) : Mat.fromString(s);
+}
+
+// Rows with the leading blanks they all share removed, as a char matrix.
+export function trimmedRows(lines) {
+  const lead = Math.min(...lines.map(l => l.length - l.trimStart().length));
+  return charMatrix(lines.map(l => l.slice(Number.isFinite(lead) ? lead : 0)));
+}
+
 export function charMatrix(lines) {
   const cols = Math.max(0, ...lines.map(l => l.length));
   const m = new Mat(lines.length, cols, new Float64Array(lines.length * cols).fill(32), null, { isChar: true });
@@ -144,6 +156,7 @@ export function charMatrix(lines) {
 // (max(floor(log10(max|A|)) + 5, 5) significant digits); matrices in
 // right-aligned columns, with the common leading blanks removed.
 export function num2strDefault(a) {
+  if (a.isEmpty) return new Mat(0, 0, new Float64Array(0), null, { isChar: true });
   const vals = Array.from(a.re);
   const finite = vals.filter(Number.isFinite);
   const isInt = vals.every(v => !Number.isFinite(v) || Number.isInteger(v));
@@ -158,9 +171,12 @@ export function num2strDefault(a) {
   };
   if (a.numel === 1) return Mat.fromString(fmtElem(0));
   const strs = vals.map((_, k) => fmtElem(k));
+  // Integers: MATLAB's %<w>d with w = 2 + the digits of the largest
+  // magnitude (a minus sign uses one of the two spare columns).
   const width = isInt && !a.isComplex
-    ? Math.max(...strs.map(s => s.length)) + 2
-    : Math.max(digits + 7 + (vals.some(v => v < 0) ? 1 : 0), ...strs.map(s => s.length + 2));
+    ? Math.max(...strs.map((s, k) => s.length - (Number.isFinite(vals[k]) && vals[k] < 0 ? 1 : 0))) + 2
+    : isInt ? Math.max(...strs.map(s => s.length)) + 3
+      : Math.max(digits + 7 + (vals.some(v => v < 0) ? 1 : 0), ...strs.map(s => s.length + 2));
   const lines = [];
   for (let r = 0; r < a.rows; r++) {
     let line = '';
@@ -183,6 +199,8 @@ export function mat2strValue(a, digits = 15) {
     const ims = Number.isFinite(im) ? genForm(Math.abs(im), digits) : nonFinite(Math.abs(im));
     return `${re}${im < 0 ? '-' : '+'}${ims}i`;
   };
+  if (a.isChar && a.isEmpty) return a.rows === 0 && a.cols === 0 ? "''" : `char(zeros(${a.rows},${a.cols}))`;
+  if (a.isEmpty) return a.rows === 0 && a.cols === 0 ? '[]' : `zeros(${a.rows},${a.cols})`;
   if (a.isChar) {
     const rows = [];
     for (let r = 0; r < a.rows; r++) {
@@ -199,6 +217,5 @@ export function mat2strValue(a, digits = 15) {
     for (let c = 0; c < a.cols; c++) parts.push(one(c * a.rows + r));
     rows.push(parts.join(' '));
   }
-  if (a.isEmpty) return `zeros(${a.rows},${a.cols})`;
   return `[${rows.join(';')}]`;
 }

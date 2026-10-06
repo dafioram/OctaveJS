@@ -25,6 +25,7 @@
 // types, integer classes (int8/uint8/...), sparse matrices, N-D arrays.
 // See README "What isn't supported".
 
+import { unparse } from './unparse.js';
 export class MatlabError extends Error {
   constructor(message, identifier = '') {
     super(message);
@@ -58,10 +59,11 @@ export function shapeArgs(args, fname) {
   if (args.length === 1) {
     const v = args[0];
     if (v.numel === 1) { const n = v.re[0]; return shape2D([n, n], fname); }
-    if (v.numel === 0) throw new MatlabError(`${fname}: size vector must have at least two elements`);
+    if (v.numel === 0) return [0, 0]; // zeros([]) is 0x0, as MATLAB
     return shape2D(Array.from(v.re), fname);
   }
   return shape2D(args.map(a => {
+    if (a.numel === 0) return 0; // an empty size counts as 0, as MATLAB
     if (a.numel !== 1) throw new MatlabError(`${fname}: size inputs must be scalar`);
     return a.re[0];
   }), fname);
@@ -288,9 +290,17 @@ export class FunctionHandle {
     this.source = source;     // original source text of the body, for anonymous functions
     this.locals = locals;     // local-function table of the file the handle was created in (or null)
   }
+  // A function handle is a 1x1 value (size(@sin) is [1 1]).
+  get rows() { return 1; }
+  get cols() { return 1; }
+  get numel() { return 1; }
+  get isEmpty() { return false; }
+  get isScalar() { return true; }
+  get isVector() { return true; }
+  sizeStr() { return '1x1'; }
   displayName() {
     if (this.name) return `@${this.name}`;
-    if (this.params) return `@(${this.params.join(',')})${this.source !== null ? this.source : ' ...'}`;
+    if (this.params) return `@(${this.params.join(',')})${this.body ? unparse(this.body) : this.source ?? ' ...'}`;
     return '@(function handle)';
   }
 }
@@ -369,6 +379,16 @@ export class StructArray extends ElementArray {
 
 // MException objects are modeled as 1x1 structs (class 'MException') with
 // identifier/message/stack fields, so ME.message etc. just work.
+// A rows-by-cols array of v's elements at the given linear positions, for
+// any kind of array (numeric/char/logical, cell, struct).
+export function selectElements(v, rows, cols, positions) {
+  if (v instanceof FunctionHandle) return v; // a 1x1 value
+  if (v instanceof Cell) return new Cell(rows, cols, positions.map(k => v.data[k]));
+  if (v instanceof StructArray) return new StructArray(rows, cols, v.fieldNames, positions.map(k => new Map(v.data[k])), v.classOverride);
+  return new Mat(rows, cols, Float64Array.from(positions, k => v.re[k]), v.im ? Float64Array.from(positions, k => v.im[k]) : null,
+    { isChar: v.isChar, isLogical: v.isLogical });
+}
+
 export function makeMException(identifier, message) {
   const stack = new StructArray(0, 1, ['file', 'name', 'line']);
   const me = StructArray.scalar({ identifier: Mat.fromString(identifier || ''), message: Mat.fromString(message || ''), stack });

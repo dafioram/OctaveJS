@@ -39,7 +39,7 @@ const isLogical = (interp, name) => interp.workspace.get(name).isLogical;
   run('ans = 7; x = 5;');
   clearOutput();
   run('x');
-  check('bare var display name', getOutput(), 'x =\n   5\n');
+  check('bare var display name', getOutput(), 'x =\n     5\n');
   check('bare var keeps ans', fmtVar(interp, 'ans'), 7);
 }
 
@@ -134,9 +134,9 @@ const isLogical = (interp, name) => interp.workspace.get(name).isLogical;
   check('anon multi-output b', fmtVar(interp, 'b'), 2);
   clearOutput();
   run('h = @(x) x.^2 + 1');
-  check('function handle display', getOutput(), 'h =\n  function_handle with value:\n\n    @(x)x.^2 + 1\n');
+  check('function handle display', getOutput(), 'h =\n  function_handle with value:\n\n    @(x)x.^2+1\n');
   run('s = func2str(h); t = func2str(@sin);');
-  check('func2str anon', fmtVar(interp, 's'), '@(x)x.^2 + 1');
+  check('func2str anon', fmtVar(interp, 's'), '@(x)x.^2+1');
   check('func2str named', fmtVar(interp, 't'), 'sin');
   checkThrows('operator on a handle errors clearly', () => run('q = h + 1;'), /function_handle/);
 }
@@ -194,13 +194,13 @@ const isLogical = (interp, name) => interp.workspace.get(name).isLogical;
 {
   const { run, getOutput, clearOutput } = makeInterp();
   const show = (src) => { clearOutput(); run(src); return getOutput(); };
-  check('pi display', show('x = pi'), 'x =\n   3.1416\n');
-  check('Inf/NaN display', show('x = [NaN Inf -Inf]'), 'x =\n    NaN    Inf   -Inf\n');
+  check('pi display', show('x = pi'), 'x =\n    3.1416\n');
+  check('Inf/NaN display', show('x = [NaN Inf -Inf]'), 'x =\n   NaN   Inf  -Inf\n');
   check('large scalar e-notation', show('x = 1e10'), 'x =\n   1.0000e+10\n');
   check('small scalar e-notation', show('x = 0.0001'), 'x =\n   1.0000e-04\n');
-  check('integer matrix', show('x = [1 2; 3 4]'), 'x =\n   1   2\n   3   4\n');
-  check('non-integer matrix', show('x = [1.5 2; 3 4]'), 'x =\n   1.5000   2.0000\n   3.0000   4.0000\n');
-  check('scale factor', show('x = [1 1000.5]'), 'x =\n   1.0e+03 *\n\n   0.0010   1.0005\n');
+  check('integer matrix', show('x = [1 2; 3 4]'), 'x =\n     1     2\n     3     4\n');
+  check('non-integer matrix', show('x = [1.5 2; 3 4]'), 'x =\n    1.5000    2.0000\n    3.0000    4.0000\n');
+  check('scale factor', show('x = [1 1000.5]'), 'x =\n   1.0e+03 *\n\n    0.0010    1.0005\n');
 }
 
 // ---- number followed by an element-wise operator ----
@@ -373,6 +373,31 @@ const isLogical = (interp, name) => interp.workspace.get(name).isLogical;
   checkClose('ifft(fft(x))', v('y').re, [1, 2, 3], 1e-14);
   check("ifft 'symmetric' is real", v('w').im, null);
   check('fft of real input is conjugate symmetric', [v('z').re[1] === v('z').re[4], v('z').im[1] === -v('z').im[4], v('z').im[0]], [true, true, 0]);
+}
+
+// ---- fixes from the MATLAB R2015a reference run (run_tests16 locks in the rest) ----
+{
+  const { interp, run } = makeInterp();
+  const v = (name) => fmtVar(interp, name);
+  run("[Q, R] = qr([1 2; 3 4]); x = (1:5) \\ 1; p = pinv(magic(4)); e = norm(magic(4)*p*magic(4) - magic(4)); P = perms([1 2 3]);");
+  checkClose('qr signs as LAPACK', [...v('Q').re, ...v('R').re], [-0.316227766016838, -0.9486832980505138, -0.9486832980505138, 0.316227766016838, -3.1622776601683795, 0, -4.427188724235731, -0.6324555320336751], 1e-12);
+  check('wide A\\b is the basic solution', v('x').re, [0, 0, 0, 0, 0.2]);
+  check('pinv of a singular matrix', v('e') < 1e-12, true);
+  check("perms in MATLAB's order", v('P').re, [3, 3, 2, 2, 1, 1, 2, 1, 3, 1, 2, 3, 1, 2, 1, 3, 3, 2]);
+  run("r = rat(pi); f = func2str(@(x) x.^2 + 1); g = @() 'it''s'; n = numel(magic(4), 1:2, ':'); s = num2str([4 -2; 1 3]); c = ['ab' 66]; k = class(max(true));");
+  check('rat text', v('r'), '3 + 1/(7 + 1/(16))');
+  check('func2str as MATLAB writes it', v('f'), '@(x)x.^2+1');
+  check("a quote after @() starts a string", interp.workspace.get('g').displayName(), "@()'it''s'");
+  check('numel with indices', v('n'), 8);
+  check('num2str integer columns', [interp.workspace.get('s').rows, interp.workspace.get('s').cols], [2, 4]);
+  check('number joined with text is a character', v('c'), 'abB');
+  check('max keeps logical', v('k'), 'logical');
+  run("m = max(zeros(0, 3)); d = diff([4 -2; 1 3], 2); z = isreal(kron([1+2i 3], 0)); u = upper(['ab'; 'cd']); h = hypot(3i, 4);");
+  check('max of an empty', [interp.workspace.get('m').rows, interp.workspace.get('m').cols], [0, 3]);
+  check('diff re-picks the dimension', v('d'), 8);
+  check('zero imaginary parts are dropped', v('z'), 1);
+  check('upper keeps a char matrix', [interp.workspace.get('u').rows, interp.workspace.get('u').cols], [2, 2]);
+  check('hypot of complex input', v('h'), 5);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

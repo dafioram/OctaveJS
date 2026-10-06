@@ -103,194 +103,196 @@ cases = {
   'contract', 'c78', 'r__ = isscalar([]);', 'r__'
   'contract', 'c79', 'r__ = isscalar(''a'');', 'r__'
   'contract', 'c80', 'r__ = ismatrix([]);', 'r__'
-  'contract', 'c81', 'r__ = iscomplex(1i);', 'r__'
-  'contract', 'c82', 'r__ = iscomplex(complex(1, 0));', 'r__'
-  'contract', 'c83', 'r__ = iscomplex(1);', 'r__'
-  'contract', 'c84', 'r__ = islogical(true);', 'r__'
-  'contract', 'c85', 'r__ = islogical(1);', 'r__'
-  'contract', 'c86', 'r__ = isnumeric(1);', 'r__'
-  'contract', 'c87', 'r__ = isnumeric(''a'');', 'r__'
-  'contract', 'c88', 'r__ = isnumeric(true);', 'r__'
-  'contract', 'c89', 'r__ = isa(1, ''double'');', 'r__'
-  'contract', 'c90', 'r__ = isa(1, ''numeric'');', 'r__'
-  'contract', 'c91', 'r__ = isa(1, ''float'');', 'r__'
-  'contract', 'c92', 'r__ = isa(true, ''numeric'');', 'r__'
-  'contract', 'c93', 'r__ = isa(@sin, ''function_handle'');', 'r__'
-  'contract', 'c94', 'r__ = isempty('''');', 'r__'
-  'contract', 'c95', 'r__ = isempty('' '');', 'r__'
-  'contract', 'c96', 'r__ = isempty(zeros(0, 3));', 'r__'
-  'contract', 'c97', 'r__ = isequal(''a'', 97);', 'r__'
-  'contract', 'c98', 'r__ = isequal([1 2], [1 2], [1 2]);', 'r__'
-  'contract', 'c99', 'r__ = isequal(NaN, NaN);', 'r__'
-  'contract', 'c100', 'r__ = isequaln(NaN, NaN);', 'r__'
-  'contract', 'c101', 'r__ = ndims(5);', 'r__'
-  'contract', 'c102', 'r__ = ndims([]);', 'r__'
-  'contract', 'c103', 'r__ = size([]);', 'r__'
-  'contract', 'c104', 'r__ = size(zeros(3, 0), 1);', 'r__'
-  'contract', 'c105', '[r, c] = size(ones(2, 5));', 'c'
-  'contract', 'c106', 'r__ = numel(''hello'');', 'r__'
-  'contract', 'c107', 'r__ = length(zeros(3, 7));', 'r__'
-  'contract', 'c108', 'r__ = length([]);', 'r__'
-  'contract', 'c109', 'r__ = zeros(2, 0);', 'r__'
-  'contract', 'c110', 'r__ = ones(0);', 'r__'
-  'contract', 'c111', 'r__ = eye(2, 3);', 'r__'
-  'contract', 'c112', 'r__ = reshape(1:6, 2, []);', 'r__'
-  'contract', 'c113', 'r__ = reshape(1:6, [], 2);', 'r__'
-  'contract', 'c114', 'r__ = linspace(0, 1, 5);', 'r__'
-  'contract', 'c115', 'r__ = linspace(1, 1, 3);', 'r__'
-  'contract', 'c116', 'r__ = linspace(0, 1, 1);', 'r__'
-  'contract', 'c117', 'r__ = linspace(0, 1, 0);', 'r__'
-  'contract', 'c118', 'r__ = logspace(0, 2, 3);', 'r__'
-  'contract', 'c119', 'r__ = size(logspace(0, 2));', 'r__'
-  'contract', 'c120', 'r__ = logspace(0, pi, 3);', 'r__'
-  'contract', 'c121', 'r__ = logspace(1, 2, 1);', 'r__'
-  'contract', 'c122', 'r__ = magic(3);', 'r__'
-  'contract', 'c123', 'r__ = magic(4);', 'r__'
-  'contract', 'c124', 'r__ = magic(0);', 'r__'
-  'contract', 'c125', 'r__ = diag([1 2]);', 'r__'
-  'contract', 'c126', 'r__ = diag([1 2; 3 4]);', 'r__'
-  'contract', 'c127', 'r__ = diag([1 2], 1);', 'r__'
-  'contract', 'c128', 'r__ = diag([1 2], -1);', 'r__'
-  'contract', 'c129', 'r__ = diag([1 2 3; 4 5 6], 1);', 'r__'
-  'contract', 'c130', 'r__ = tril(magic(3));', 'r__'
-  'contract', 'c131', 'r__ = triu(magic(3), 1);', 'r__'
-  'contract', 'c132', 'r__ = tril(ones(2, 3), -1);', 'r__'
-  'contract', 'c133', 'r__ = circshift(1:5, 2);', 'r__'
-  'contract', 'c134', 'r__ = circshift([1; 2; 3], -1);', 'r__'
-  'contract', 'c135', 'r__ = fliplr(''abc'');', 'r__'
-  'contract', 'c136', 'r__ = kron([1 2], [1; 1]);', 'r__'
-  'contract', 'c137', 'r__ = cross([1 0 0], [0 1 0]);', 'r__'
-  'contract', 'c138', 'r__ = cross([1; 0; 0], [0; 1; 0]);', 'r__'
-  'contract', 'c139', 'r__ = dot([1 2 3], [4 5 6]);', 'r__'
-  'contract', 'c140', 'r__ = sum([]);', 'r__'
-  'contract', 'c141', 'r__ = sum(zeros(0, 3));', 'r__'
-  'contract', 'c142', 'r__ = sum(zeros(3, 0));', 'r__'
-  'contract', 'c143', 'r__ = prod([]);', 'r__'
-  'contract', 'c144', 'r__ = mean([]);', 'r__'
-  'contract', 'c145', 'r__ = max([]);', 'r__'
-  'contract', 'c146', 'r__ = sum(true(1, 3));', 'r__'
-  'contract', 'c147', 'r__ = sum(''ab'');', 'r__'
-  'contract', 'c148', 'r__ = any([]);', 'r__'
-  'contract', 'c149', 'r__ = all([]);', 'r__'
-  'contract', 'c150', 'r__ = any([0 0; 0 1]);', 'r__'
-  'contract', 'c151', 'r__ = cumsum([1 2; 3 4], 2);', 'r__'
-  'contract', 'c152', 'r__ = cumprod([1 2 3]);', 'r__'
-  'contract', 'c153', 'r__ = cumprod([1 2; 3 4]);', 'r__'
-  'contract', 'c154', 'r__ = mean([1 2; 3 4]);', 'r__'
-  'contract', 'c155', 'r__ = mean([1 2; 3 4], 2);', 'r__'
-  'contract', 'c156', 'r__ = mean([1 2; 3 4], ''all'');', 'r__'
-  'contract', 'c157', 'r__ = mean([1 NaN 3], ''omitnan'');', 'r__'
-  'contract', 'c158', 'r__ = median([3 1 4 1 5]);', 'r__'
-  'contract', 'c159', 'r__ = median([1 2 3 4]);', 'r__'
-  'contract', 'c160', 'r__ = var([1 2 3 4]);', 'r__'
-  'contract', 'c161', 'r__ = var([1 2 3 4], 1);', 'r__'
-  'contract', 'c162', 'r__ = std([2 4 4 4 5 5 7 9]);', 'r__'
-  'contract', 'c163', 'r__ = mode([1 2 2 3 3]);', 'r__'
-  'contract', 'c164', 'r__ = max([1 NaN 3]);', 'r__'
-  'contract', 'c165', 'r__ = min([NaN NaN]);', 'r__'
-  'contract', 'c166', 'r__ = max([1 5; 7 2]);', 'r__'
-  'contract', 'c167', '[m, i] = max([1 5; 7 2], [], 2);', 'i'
-  'contract', 'c168', 'r__ = max([1 2], 1.5);', 'r__'
-  'contract', 'c169', 'r__ = min([4 2 8], [], 2);', 'r__'
-  'contract', 'c170', 'r__ = movmin([4 2 6 1 3], 3);', 'r__'
-  'contract', 'c171', 'r__ = movprod([1 2 3 4], 2);', 'r__'
-  'contract', 'c172', 'r__ = movvar([1 2 3 4 5], 3);', 'r__'
-  'contract', 'c173', 'r__ = diff([1 4 9 16]);', 'r__'
-  'contract', 'c174', 'r__ = diff([1 4 9 16], 2);', 'r__'
-  'contract', 'c175', 'r__ = trapz([1 2 3]);', 'r__'
-  'contract', 'c176', 'r__ = cumtrapz([1 2 3]);', 'r__'
-  'contract', 'c177', 'r__ = find([0 1 0 1]);', 'r__'
-  'contract', 'c178', 'r__ = find([0; 1; 1]);', 'r__'
-  'contract', 'c179', 'r__ = find([0 0]);', 'r__'
-  'contract', 'c180', 'r__ = find([0; 0]);', 'r__'
-  'contract', 'c181', 'r__ = find([]);', 'r__'
-  'contract', 'c182', 'r__ = find([1 1 1], 2);', 'r__'
-  'contract', 'c183', 'r__ = sort([3 1 2], ''descend'');', 'r__'
-  'contract', 'c184', '[s, i] = sort([3 1 2]);', 'i'
-  'contract', 'c185', 'r__ = sort([3 NaN 1]);', 'r__'
-  'contract', 'c186', 'r__ = sort([3 NaN 1], ''descend'');', 'r__'
-  'contract', 'c187', 'r__ = unique([3 1 2 1]);', 'r__'
-  'contract', 'c188', 'r__ = unique([3; 1; 1]);', 'r__'
-  'contract', 'c189', 'r__ = ismember([1 5], [1 2 3]);', 'r__'
-  'contract', 'c190', 'r__ = det(magic(3));', 'r__'
-  'contract', 'c191', 'r__ = inv([2 0; 0 4]);', 'r__'
-  'contract', 'c192', 'r__ = rank(magic(4));', 'r__'
-  'contract', 'c193', 'r__ = trace(magic(3));', 'r__'
-  'contract', 'c194', 'r__ = norm([3 4]);', 'r__'
-  'contract', 'c195', 'r__ = norm([1 2; 3 4], ''fro'');', 'r__'
-  'contract', 'c196', 'r__ = norm([1 2; 3 4], 1);', 'r__'
-  'contract', 'c197', 'r__ = norm([1 2; 3 4], Inf);', 'r__'
-  'contract', 'c198', 'r__ = svd([3 0; 0 4]);', 'r__'
-  'contract', 'c199', 'r__ = pinv([1 2; 2 4]);', 'r__'
-  'contract', 'c200', '[L, U, P] = lu([1 2; 3 4]);', 'L'
-  'contract', 'c201', '[L, U, P] = lu([1 2; 3 4]);', 'U'
-  'contract', 'c202', '[L, U, P] = lu([1 2; 3 4]);', 'P'
-  'contract', 'c203', '[V, D] = eig([1 2; 3 4]);', 'V'
-  'contract', 'c204', '[V, D] = eig([1 2; 3 4]);', 'D'
-  'contract', 'c205', '[V, D] = eig([0 1; -1 0]);', 'V'
-  'contract', 'c206', 'r__ = [2 0; 0 4] \ [2; 4];', 'r__'
-  'contract', 'c207', 'r__ = [1 2] / [2 4];', 'r__'
-  'contract', 'c208', 'r__ = [1 1; 0 1] ^ 3;', 'r__'
-  'contract', 'c209', 'r__ = polyfit([1 2 3], [2 4 6], 1);', 'r__'
-  'contract', 'c210', 'r__ = polyval([1 0 -1], 3);', 'r__'
-  'contract', 'c211', 'r__ = conv([1 1], [1 -1]);', 'r__'
-  'contract', 'c212', 'r__ = interp1([1 2 3], [10 20 30], 2.5);', 'r__'
-  'contract', 'c213', 'r__ = interp1([1 2], [10 20], 3);', 'r__'
-  'contract', 'c214', 'r__ = nchoosek(5, 2);', 'r__'
-  'contract', 'c215', 'r__ = factorial(5);', 'r__'
-  'contract', 'c216', 'r__ = primes(10);', 'r__'
-  'contract', 'c217', 'r__ = isprime(1:5);', 'r__'
-  'contract', 'c218', 'r__ = gcd(12, 18);', 'r__'
-  'contract', 'c219', 'r__ = lcm(4, 6);', 'r__'
-  'contract', 'c220', 'r__ = logical([2 0]);', 'r__'
-  'contract', 'c221', 'r__ = double(''A'');', 'r__'
-  'contract', 'c222', 'r__ = char(72);', 'r__'
-  'contract', 'c223', 'r__ = char({''a'', ''bcd''});', 'r__'
-  'contract', 'c224', 'r__ = char(''a'', ''bc'');', 'r__'
-  'contract', 'c225', 'r__ = char([72 105]);', 'r__'
-  'contract', 'c226', 'r__ = num2str(pi);', 'r__'
-  'contract', 'c227', 'r__ = num2str(1e10);', 'r__'
-  'contract', 'c228', 'r__ = num2str(-0.5);', 'r__'
-  'contract', 'c229', 'r__ = num2str(true);', 'r__'
-  'contract', 'c230', 'r__ = int2str(2.5);', 'r__'
-  'contract', 'c231', 'r__ = mat2str([1 2; 3 4]);', 'r__'
-  'contract', 'c232', 'r__ = mat2str(true);', 'r__'
-  'contract', 'c233', 'r__ = mat2str([0.1 NaN Inf]);', 'r__'
-  'contract', 'c234', 'r__ = sprintf(''%d'', 3.5);', 'r__'
-  'contract', 'c235', 'r__ = sprintf(''%5.2f|'', [1 2]);', 'r__'
-  'contract', 'c236', 'r__ = sprintf(''%d,'', [1 2; 3 4]);', 'r__'
-  'contract', 'c237', 'r__ = upper(''abC'');', 'r__'
-  'contract', 'c238', 'r__ = strtrim(sprintf('' a\t''));', 'r__'
-  'contract', 'c239', 'r__ = strrep(''abcb'', ''b'', ''XY'');', 'r__'
-  'contract', 'c240', 'r__ = regexprep(''abc'', ''b'', ''X'');', 'r__'
-  'contract', 'c241', 'r__ = strjoin({''a'', ''b''}, ''-'');', 'r__'
-  'contract', 'c242', 'r__ = strsplit(''a,b,,c'', '','');', 'r__'
-  'contract', 'c243', 'r__ = strsplit(''a,b,,c'', '','', ''CollapseDelimiters'', false);', 'r__'
-  'contract', 'c244', 'r__ = str2double(''3.5'');', 'r__'
-  'contract', 'c245', 'r__ = str2double(''x'');', 'r__'
-  'contract', 'c246', 'r__ = str2double({''1'', ''a''});', 'r__'
-  'contract', 'c247', 'r__ = str2double(''1,000'');', 'r__'
-  'contract', 'c248', 'r__ = str2double(''3abc'');', 'r__'
-  'contract', 'c249', 'r__ = str2double(''-Inf'');', 'r__'
-  'contract', 'c250', 'r__ = str2double(''1+2i'');', 'r__'
-  'contract', 'c251', 'r__ = str2double(5);', 'r__'
-  'contract', 'c252', 'r__ = strcmp(''a'', 97);', 'r__'
-  'contract', 'c253', 'r__ = strcmpi(''ABC'', ''abc'');', 'r__'
-  'contract', 'c254', 'r__ = strcmpi({''a'', ''B''}, ''b'');', 'r__'
-  'contract', 'c255', 'r__ = strfind(''abcbc'', ''bc'');', 'r__'
-  'contract', 'c256', 'r__ = strfind(''abc'', ''x'');', 'r__'
-  'contract', 'c257', 'r__ = num2cell([1 2]);', 'r__'
-  'contract', 'c258', 'r__ = cell2mat({1 2; 3 4});', 'r__'
-  'contract', 'c259', 'r__ = isfield(struct(''a'', 1), {''a'', ''b''});', 'r__'
-  'contract', 'c260', 'r__ = fieldnames(struct(''b'', 1, ''a'', 2));', 'r__'
-  'contract', 'c261', 'r__ = struct2cell(struct(''a'', 1, ''b'', ''x''));', 'r__'
-  'contract', 'c262', 'r__ = numfields(struct(''a'', 1, ''b'', 2));', 'r__'
-  'contract', 'c263', 'r__ = getfield(struct(''a'', 5), ''a'');', 'r__'
-  'contract', 'c264', 's = setfield(struct(''a'', 5), ''a'', 6); r = s.a;', 'r'
-  'contract', 'c265', 'r__ = cellfun(@numel, {''ab'', ''cde'', ''''});', 'r__'
-  'contract', 'c266', 'r__ = cellfun(@isempty, {});', 'r__'
-  'contract', 'c267', 'r__ = arrayfun(@(x) x^2, [1 2 3]);', 'r__'
-  'contract', 'c268', 'r__ = size(cell(2, 3));', 'r__'
+  'contract', 'c81', 'r__ = isreal(1i);', 'r__'
+  'contract', 'c82', 'r__ = isreal(complex(1, 0));', 'r__'
+  'contract', 'c83', 'r__ = isreal(1);', 'r__'
+  'contract', 'c84', 'r__ = iscomplex(1i);', 'r__'
+  'contract', 'c85', 'r__ = iscomplex(1);', 'r__'
+  'contract', 'c86', 'r__ = islogical(true);', 'r__'
+  'contract', 'c87', 'r__ = islogical(1);', 'r__'
+  'contract', 'c88', 'r__ = isnumeric(1);', 'r__'
+  'contract', 'c89', 'r__ = isnumeric(''a'');', 'r__'
+  'contract', 'c90', 'r__ = isnumeric(true);', 'r__'
+  'contract', 'c91', 'r__ = isa(1, ''double'');', 'r__'
+  'contract', 'c92', 'r__ = isa(1, ''numeric'');', 'r__'
+  'contract', 'c93', 'r__ = isa(1, ''float'');', 'r__'
+  'contract', 'c94', 'r__ = isa(true, ''numeric'');', 'r__'
+  'contract', 'c95', 'r__ = isa(@sin, ''function_handle'');', 'r__'
+  'contract', 'c96', 'r__ = isempty('''');', 'r__'
+  'contract', 'c97', 'r__ = isempty('' '');', 'r__'
+  'contract', 'c98', 'r__ = isempty(zeros(0, 3));', 'r__'
+  'contract', 'c99', 'r__ = isequal(''a'', 97);', 'r__'
+  'contract', 'c100', 'r__ = isequal([1 2], [1 2], [1 2]);', 'r__'
+  'contract', 'c101', 'r__ = isequal(NaN, NaN);', 'r__'
+  'contract', 'c102', 'r__ = isequaln(NaN, NaN);', 'r__'
+  'contract', 'c103', 'r__ = ndims(5);', 'r__'
+  'contract', 'c104', 'r__ = ndims([]);', 'r__'
+  'contract', 'c105', 'r__ = size([]);', 'r__'
+  'contract', 'c106', 'r__ = size(zeros(3, 0), 1);', 'r__'
+  'contract', 'c107', '[r, c] = size(ones(2, 5));', 'c'
+  'contract', 'c108', 'r__ = numel(''hello'');', 'r__'
+  'contract', 'c109', 'r__ = length(zeros(3, 7));', 'r__'
+  'contract', 'c110', 'r__ = length([]);', 'r__'
+  'contract', 'c111', 'r__ = zeros(2, 0);', 'r__'
+  'contract', 'c112', 'r__ = ones(0);', 'r__'
+  'contract', 'c113', 'r__ = eye(2, 3);', 'r__'
+  'contract', 'c114', 'r__ = reshape(1:6, 2, []);', 'r__'
+  'contract', 'c115', 'r__ = reshape(1:6, [], 2);', 'r__'
+  'contract', 'c116', 'r__ = linspace(0, 1, 5);', 'r__'
+  'contract', 'c117', 'r__ = linspace(1, 1, 3);', 'r__'
+  'contract', 'c118', 'r__ = linspace(0, 1, 1);', 'r__'
+  'contract', 'c119', 'r__ = linspace(0, 1, 0);', 'r__'
+  'contract', 'c120', 'r__ = logspace(0, 2, 3);', 'r__'
+  'contract', 'c121', 'r__ = size(logspace(0, 2));', 'r__'
+  'contract', 'c122', 'r__ = logspace(0, pi, 3);', 'r__'
+  'contract', 'c123', 'r__ = logspace(1, 2, 1);', 'r__'
+  'contract', 'c124', 'r__ = magic(3);', 'r__'
+  'contract', 'c125', 'r__ = magic(4);', 'r__'
+  'contract', 'c126', 'r__ = magic(0);', 'r__'
+  'contract', 'c127', 'r__ = diag([1 2]);', 'r__'
+  'contract', 'c128', 'r__ = diag([1 2; 3 4]);', 'r__'
+  'contract', 'c129', 'r__ = diag([1 2], 1);', 'r__'
+  'contract', 'c130', 'r__ = diag([1 2], -1);', 'r__'
+  'contract', 'c131', 'r__ = diag([1 2 3; 4 5 6], 1);', 'r__'
+  'contract', 'c132', 'r__ = tril(magic(3));', 'r__'
+  'contract', 'c133', 'r__ = triu(magic(3), 1);', 'r__'
+  'contract', 'c134', 'r__ = tril(ones(2, 3), -1);', 'r__'
+  'contract', 'c135', 'r__ = circshift(1:5, 2);', 'r__'
+  'contract', 'c136', 'r__ = circshift([1; 2; 3], -1);', 'r__'
+  'contract', 'c137', 'r__ = fliplr(''abc'');', 'r__'
+  'contract', 'c138', 'r__ = kron([1 2], [1; 1]);', 'r__'
+  'contract', 'c139', 'r__ = cross([1 0 0], [0 1 0]);', 'r__'
+  'contract', 'c140', 'r__ = cross([1; 0; 0], [0; 1; 0]);', 'r__'
+  'contract', 'c141', 'r__ = dot([1 2 3], [4 5 6]);', 'r__'
+  'contract', 'c142', 'r__ = sum([]);', 'r__'
+  'contract', 'c143', 'r__ = sum(zeros(0, 3));', 'r__'
+  'contract', 'c144', 'r__ = sum(zeros(3, 0));', 'r__'
+  'contract', 'c145', 'r__ = prod([]);', 'r__'
+  'contract', 'c146', 'r__ = mean([]);', 'r__'
+  'contract', 'c147', 'r__ = max([]);', 'r__'
+  'contract', 'c148', 'r__ = sum(true(1, 3));', 'r__'
+  'contract', 'c149', 'r__ = sum(''ab'');', 'r__'
+  'contract', 'c150', 'r__ = any([]);', 'r__'
+  'contract', 'c151', 'r__ = all([]);', 'r__'
+  'contract', 'c152', 'r__ = any([0 0; 0 1]);', 'r__'
+  'contract', 'c153', 'r__ = cumsum([1 2; 3 4], 2);', 'r__'
+  'contract', 'c154', 'r__ = cumprod([1 2 3]);', 'r__'
+  'contract', 'c155', 'r__ = cumprod([1 2; 3 4]);', 'r__'
+  'contract', 'c156', 'r__ = mean([1 2; 3 4]);', 'r__'
+  'contract', 'c157', 'r__ = mean([1 2; 3 4], 2);', 'r__'
+  'contract', 'c158', 'r__ = mean([1 2; 3 4], ''all'');', 'r__'
+  'contract', 'c159', 'r__ = mean([1 NaN 3], ''omitnan'');', 'r__'
+  'contract', 'c160', 'r__ = median([3 1 4 1 5]);', 'r__'
+  'contract', 'c161', 'r__ = median([1 2 3 4]);', 'r__'
+  'contract', 'c162', 'r__ = var([1 2 3 4]);', 'r__'
+  'contract', 'c163', 'r__ = var([1 2 3 4], 1);', 'r__'
+  'contract', 'c164', 'r__ = std([2 4 4 4 5 5 7 9]);', 'r__'
+  'contract', 'c165', 'r__ = mode([1 2 2 3 3]);', 'r__'
+  'contract', 'c166', 'r__ = max([1 NaN 3]);', 'r__'
+  'contract', 'c167', 'r__ = min([NaN NaN]);', 'r__'
+  'contract', 'c168', 'r__ = max([1 5; 7 2]);', 'r__'
+  'contract', 'c169', '[m, i] = max([1 5; 7 2], [], 2);', 'i'
+  'contract', 'c170', 'r__ = max([1 2], 1.5);', 'r__'
+  'contract', 'c171', 'r__ = min([4 2 8], [], 2);', 'r__'
+  'contract', 'c172', 'r__ = movmin([4 2 6 1 3], 3);', 'r__'
+  'contract', 'c173', 'r__ = movprod([1 2 3 4], 2);', 'r__'
+  'contract', 'c174', 'r__ = movvar([1 2 3 4 5], 3);', 'r__'
+  'contract', 'c175', 'r__ = diff([1 4 9 16]);', 'r__'
+  'contract', 'c176', 'r__ = diff([1 4 9 16], 2);', 'r__'
+  'contract', 'c177', 'r__ = trapz([1 2 3]);', 'r__'
+  'contract', 'c178', 'r__ = cumtrapz([1 2 3]);', 'r__'
+  'contract', 'c179', 'r__ = find([0 1 0 1]);', 'r__'
+  'contract', 'c180', 'r__ = find([0; 1; 1]);', 'r__'
+  'contract', 'c181', 'r__ = find([0 0]);', 'r__'
+  'contract', 'c182', 'r__ = find([0; 0]);', 'r__'
+  'contract', 'c183', 'r__ = find([]);', 'r__'
+  'contract', 'c184', 'r__ = find([1 1 1], 2);', 'r__'
+  'contract', 'c185', 'r__ = sort([3 1 2], ''descend'');', 'r__'
+  'contract', 'c186', '[s, i] = sort([3 1 2]);', 'i'
+  'contract', 'c187', 'r__ = sort([3 NaN 1]);', 'r__'
+  'contract', 'c188', 'r__ = sort([3 NaN 1], ''descend'');', 'r__'
+  'contract', 'c189', 'r__ = unique([3 1 2 1]);', 'r__'
+  'contract', 'c190', 'r__ = unique([3; 1; 1]);', 'r__'
+  'contract', 'c191', 'r__ = ismember([1 5], [1 2 3]);', 'r__'
+  'contract', 'c192', 'r__ = det(magic(3));', 'r__'
+  'contract', 'c193', 'r__ = inv([2 0; 0 4]);', 'r__'
+  'contract', 'c194', 'r__ = rank(magic(4));', 'r__'
+  'contract', 'c195', 'r__ = trace(magic(3));', 'r__'
+  'contract', 'c196', 'r__ = norm([3 4]);', 'r__'
+  'contract', 'c197', 'r__ = norm([1 2; 3 4], ''fro'');', 'r__'
+  'contract', 'c198', 'r__ = norm([1 2; 3 4], 1);', 'r__'
+  'contract', 'c199', 'r__ = norm([1 2; 3 4], Inf);', 'r__'
+  'contract', 'c200', 'r__ = svd([3 0; 0 4]);', 'r__'
+  'contract', 'c201', 'r__ = pinv([1 2; 2 4]);', 'r__'
+  'contract', 'c202', '[L, U, P] = lu([1 2; 3 4]);', 'L'
+  'contract', 'c203', '[L, U, P] = lu([1 2; 3 4]);', 'U'
+  'contract', 'c204', '[L, U, P] = lu([1 2; 3 4]);', 'P'
+  'contract', 'c205', '[V, D] = eig([1 2; 3 4]);', 'V'
+  'contract', 'c206', '[V, D] = eig([1 2; 3 4]);', 'D'
+  'contract', 'c207', '[V, D] = eig([0 1; -1 0]);', 'V'
+  'contract', 'c208', 'r__ = [2 0; 0 4] \ [2; 4];', 'r__'
+  'contract', 'c209', 'r__ = [1 2] / [2 4];', 'r__'
+  'contract', 'c210', 'r__ = [1 1; 0 1] ^ 3;', 'r__'
+  'contract', 'c211', 'r__ = polyfit([1 2 3], [2 4 6], 1);', 'r__'
+  'contract', 'c212', 'r__ = polyval([1 0 -1], 3);', 'r__'
+  'contract', 'c213', 'r__ = conv([1 1], [1 -1]);', 'r__'
+  'contract', 'c214', 'r__ = interp1([1 2 3], [10 20 30], 2.5);', 'r__'
+  'contract', 'c215', 'r__ = interp1([1 2], [10 20], 3);', 'r__'
+  'contract', 'c216', 'r__ = nchoosek(5, 2);', 'r__'
+  'contract', 'c217', 'r__ = factorial(5);', 'r__'
+  'contract', 'c218', 'r__ = primes(10);', 'r__'
+  'contract', 'c219', 'r__ = isprime(1:5);', 'r__'
+  'contract', 'c220', 'r__ = gcd(12, 18);', 'r__'
+  'contract', 'c221', 'r__ = lcm(4, 6);', 'r__'
+  'contract', 'c222', 'r__ = logical([2 0]);', 'r__'
+  'contract', 'c223', 'r__ = double(''A'');', 'r__'
+  'contract', 'c224', 'r__ = char(72);', 'r__'
+  'contract', 'c225', 'r__ = char({''a'', ''bcd''});', 'r__'
+  'contract', 'c226', 'r__ = char(''a'', ''bc'');', 'r__'
+  'contract', 'c227', 'r__ = char([72 105]);', 'r__'
+  'contract', 'c228', 'r__ = num2str(pi);', 'r__'
+  'contract', 'c229', 'r__ = num2str(1e10);', 'r__'
+  'contract', 'c230', 'r__ = num2str(-0.5);', 'r__'
+  'contract', 'c231', 'r__ = num2str(true);', 'r__'
+  'contract', 'c232', 'r__ = int2str(2.5);', 'r__'
+  'contract', 'c233', 'r__ = mat2str([1 2; 3 4]);', 'r__'
+  'contract', 'c234', 'r__ = mat2str(true);', 'r__'
+  'contract', 'c235', 'r__ = mat2str([0.1 NaN Inf]);', 'r__'
+  'contract', 'c236', 'r__ = sprintf(''%d'', 3.5);', 'r__'
+  'contract', 'c237', 'r__ = sprintf(''%5.2f|'', [1 2]);', 'r__'
+  'contract', 'c238', 'r__ = sprintf(''%d,'', [1 2; 3 4]);', 'r__'
+  'contract', 'c239', 'r__ = upper(''abC'');', 'r__'
+  'contract', 'c240', 'r__ = strtrim(sprintf('' a\t''));', 'r__'
+  'contract', 'c241', 'r__ = strrep(''abcb'', ''b'', ''XY'');', 'r__'
+  'contract', 'c242', 'r__ = regexprep(''abc'', ''b'', ''X'');', 'r__'
+  'contract', 'c243', 'r__ = strjoin({''a'', ''b''}, ''-'');', 'r__'
+  'contract', 'c244', 'r__ = strsplit(''a,b,,c'', '','');', 'r__'
+  'contract', 'c245', 'r__ = strsplit(''a,b,,c'', '','', ''CollapseDelimiters'', false);', 'r__'
+  'contract', 'c246', 'r__ = str2double(''3.5'');', 'r__'
+  'contract', 'c247', 'r__ = str2double(''x'');', 'r__'
+  'contract', 'c248', 'r__ = str2double({''1'', ''a''});', 'r__'
+  'contract', 'c249', 'r__ = str2double(''1,000'');', 'r__'
+  'contract', 'c250', 'r__ = str2double(''3abc'');', 'r__'
+  'contract', 'c251', 'r__ = str2double(''-Inf'');', 'r__'
+  'contract', 'c252', 'r__ = str2double(''1+2i'');', 'r__'
+  'contract', 'c253', 'r__ = str2double(5);', 'r__'
+  'contract', 'c254', 'r__ = strcmp(''a'', 97);', 'r__'
+  'contract', 'c255', 'r__ = strcmpi(''ABC'', ''abc'');', 'r__'
+  'contract', 'c256', 'r__ = strcmpi({''a'', ''B''}, ''b'');', 'r__'
+  'contract', 'c257', 'r__ = strfind(''abcbc'', ''bc'');', 'r__'
+  'contract', 'c258', 'r__ = strfind(''abc'', ''x'');', 'r__'
+  'contract', 'c259', 'r__ = num2cell([1 2]);', 'r__'
+  'contract', 'c260', 'r__ = cell2mat({1 2; 3 4});', 'r__'
+  'contract', 'c261', 'r__ = isfield(struct(''a'', 1), {''a'', ''b''});', 'r__'
+  'contract', 'c262', 'r__ = fieldnames(struct(''b'', 1, ''a'', 2));', 'r__'
+  'contract', 'c263', 'r__ = struct2cell(struct(''a'', 1, ''b'', ''x''));', 'r__'
+  'contract', 'c264', 'r__ = numfields(struct(''a'', 1, ''b'', 2));', 'r__'
+  'contract', 'c265', 'r__ = getfield(struct(''a'', 5), ''a'');', 'r__'
+  'contract', 'c266', 's = setfield(struct(''a'', 5), ''a'', 6); r = s.a;', 'r'
+  'contract', 'c267', 'r__ = cellfun(@numel, {''ab'', ''cde'', ''''});', 'r__'
+  'contract', 'c268', 'r__ = cellfun(@isempty, {});', 'r__'
+  'contract', 'c269', 'r__ = arrayfun(@(x) x^2, [1 2 3]);', 'r__'
+  'contract', 'c270', 'r__ = size(cell(2, 3));', 'r__'
   'error', 'e1', 'x = undefined_thing;', ''
   'error', 'e2', 'y = undefined_fn(3);', ''
   'error', 'e3', 'a = [1 2 3]; a(5);', ''
@@ -467,6 +469,431 @@ cases = {
   'probe', 'p150', 'r__ = any(zeros(0, 3));', 'r__'
   'probe', 'p151', 'r__ = all(zeros(0, 3));', 'r__'
   'probe', 'p152', 'r__ = xor([1 0], [1 1]);', 'r__'
+  'lang', 'l1', 'A = magic(4); r = A(2, 3);', 'r'
+  'lang', 'l2', 'A = magic(4); r = A(7);', 'r'
+  'lang', 'l3', 'A = magic(4); r = A(end, 1);', 'r'
+  'lang', 'l4', 'A = magic(4); r = A(end);', 'r'
+  'lang', 'l5', 'A = magic(4); r = A([1 3], [2 4]);', 'r'
+  'lang', 'l6', 'A = magic(4); r = A(:, 2);', 'r'
+  'lang', 'l7', 'A = magic(4); r = A(2, :);', 'r'
+  'lang', 'l8', 'A = magic(4); r = A(:);', 'r'
+  'lang', 'l9', 'A = magic(4); r = A(:)'';', 'r'
+  'lang', 'l10', 'A = magic(4); r = A(A > 10);', 'r'
+  'lang', 'l11', 'A = magic(4); r = A(logical([1 0 1 0]), :);', 'r'
+  'lang', 'l12', 'A = magic(4); r = A([]);', 'r'
+  'lang', 'l13', 'A = magic(4); r = A([], 1);', 'r'
+  'lang', 'l14', 'A = magic(4); r = A(:, []);', 'r'
+  'lang', 'l15', 'v = 1:5; r = v([true false true]);', 'r'
+  'lang', 'l16', 'v = (1:5)''; r = v([2 4]);', 'r'
+  'lang', 'l17', 'v = 1:5; r = v([2; 4]);', 'r'
+  'lang', 'l18', 'v = (1:5)''; r = v([2 4; 1 3]);', 'r'
+  'lang', 'l19', 'A = magic(3); r = A([1 2; 3 4]);', 'r'
+  'lang', 'l20', 'A = magic(3); r = A(end:-1:1, :);', 'r'
+  'lang', 'l21', 'A = magic(3); r = A(end, end);', 'r'
+  'lang', 'l22', 'v = 1:5; r = v(end-1:end);', 'r'
+  'lang', 'l23', 'v = 1:5; r = v(logical([0 0 0 0 0]));', 'r'
+  'lang', 'l24', 'x = 5; r = x(1, 1, 1);', 'r'
+  'lang', 'l25', 's = ''hello''; r = s([1 end]);', 'r'
+  'lang', 'l26', 's = ''hello''; r = s(end:-1:1);', 'r'
+  'lang', 'l27', 'c = {1, ''a'', [2 3]}; r = c(2);', 'r'
+  'lang', 'l28', 'c = {1, ''a'', [2 3]}; r = c{3}(2);', 'r'
+  'lang', 'l29', 'x = []; x(3) = 5;', 'x'
+  'lang', 'l30', 'x = 1:3; x(6) = 9;', 'x'
+  'lang', 'l31', 'x = (1:3)''; x(5) = 9;', 'x'
+  'lang', 'l32', 'A = eye(2); A(3, 3) = 7;', 'A'
+  'lang', 'l33', 'A = magic(3); A(2, :) = [];', 'A'
+  'lang', 'l34', 'A = magic(3); A(:, [1 3]) = [];', 'A'
+  'lang', 'l35', 'v = 1:5; v([2 4]) = [];', 'v'
+  'lang', 'l36', 'v = (1:5)''; v(2) = [];', 'v'
+  'lang', 'l37', 'A = magic(3); A(5) = [];', 'A'
+  'lang', 'l38', 'A = zeros(2); A(:) = 1:4;', 'A'
+  'lang', 'l39', 'A = zeros(2, 3); A(2, :) = 7;', 'A'
+  'lang', 'l40', 'A = magic(3); A(A > 5) = 0;', 'A'
+  'lang', 'l41', 's = ''abc''; s(5) = ''e''; r = double(s);', 'r'
+  'lang', 'l42', 's = ''abc''; s(2) = [];', 's'
+  'lang', 'l43', 'c = {}; c{3} = 1;', 'c'
+  'lang', 'l44', 'c = {1, 2}; c(2) = [];', 'c'
+  'lang', 'l45', 'x = 1; x(2, 3) = 4;', 'x'
+  'lang', 'l46', 'A = 1:3; A(:, end+1) = 4;', 'A'
+  'lang', 'l47', 'A = [1 2; 3 4]; A(end+1, :) = [5 6];', 'A'
+  'lang', 'l48', 'v = []; v(end+1) = 3; v(end+1) = 4;', 'v'
+  'lang', 'l49', 'x = true(1, 2); x(4) = true;', 'x'
+  'lang', 'l50', 'x = true(1, 2); x(2) = 5;', 'x'
+  'lang', 'l51', 'x = ''ab''; x(1) = 66;', 'x'
+  'lang', 'l52', 'x = 1:3; x(2) = true;', 'x'
+  'lang', 'l53', 's.a = 1; s.b.c = ''x''; r = s.b.c;', 'r'
+  'lang', 'l54', 's(2).a = 5; r = size(s);', 'r'
+  'lang', 'l55', 's(2).a = 5; r = s(1).a;', 'r'
+  'lang', 'l56', 's = struct(''a'', {1, 2, 3}); r = [s.a];', 'r'
+  'lang', 'l57', 's = struct(''a'', {1, 2, 3}); r = {s.a};', 'r'
+  'lang', 'l58', 's = struct(''a'', {}); r = size(s);', 'r'
+  'lang', 'l59', 's = struct(''a'', {{1, 2}}); r = s.a;', 'r'
+  'lang', 'l60', 's.x = 1; f = ''x''; r = s.(f);', 'r'
+  'lang', 'l61', 'c = {1, 2; 3, 4}; r = [c{:, 1}];', 'r'
+  'lang', 'l62', 'c = {1, ''ab''}; r = class(c{2});', 'r'
+  'lang', 'l63', 'c = cell(2, 3); r = size(c{1});', 'r'
+  'lang', 'l64', 'c = num2cell(magic(2)); r = c{2, 1};', 'r'
+  'lang', 'l65', 's = struct(); r = isempty(fieldnames(s));', 'r'
+  'lang', 'l66', 's = struct(''a'', 1, ''b'', 2); s = rmfield(s, ''a''); r = fieldnames(s);', 'r'
+  'lang', 'l67', 's = struct(''b'', 1, ''a'', 2); r = fieldnames(orderfields(s));', 'r'
+  'lang', 'l68', 'x = struct(''a'', 1); y = x; y.a = 2; r = x.a;', 'r'
+  'lang', 'l69', 'c = {1}; d = c; d{1} = 2; r = c{1};', 'r'
+  'lang', 'l70', 'A = 1:3; B = A; B(1) = 9; r = A;', 'r'
+  'lang', 'l71', 'r__ = -2^2;', 'r__'
+  'lang', 'l72', 'r__ = 2^-1;', 'r__'
+  'lang', 'l73', 'r__ = -2^-2;', 'r__'
+  'lang', 'l74', 'r__ = 2^3^2;', 'r__'
+  'lang', 'l75', 'r__ = ~1 == 0;', 'r__'
+  'lang', 'l76', 'r__ = 1:3 + 1;', 'r__'
+  'lang', 'l77', 'r__ = (1:3)'';', 'r__'
+  'lang', 'l78', 'r__ = [1 2 3]'' * [1 2];', 'r__'
+  'lang', 'l79', 'r__ = [1+2i 3]'';', 'r__'
+  'lang', 'l80', 'r__ = [1+2i 3].'';', 'r__'
+  'lang', 'l81', 'r__ = 1:0.5:3;', 'r__'
+  'lang', 'l82', 'r__ = 3:-1:1;', 'r__'
+  'lang', 'l83', 'r__ = 1:-1:3;', 'r__'
+  'lang', 'l84', 'r__ = 0:0.1:0.5;', 'r__'
+  'lang', 'l85', 'r__ = -1:1;', 'r__'
+  'lang', 'l86', 'r__ = 5:5;', 'r__'
+  'lang', 'l87', 'r__ = 1.5:3;', 'r__'
+  'lang', 'l88', 'r__ = size(1:0);', 'r__'
+  'lang', 'l89', 'r__ = size(zeros(1, 0) + 1);', 'r__'
+  'lang', 'l90', 'r__ = ''a'' + ''b'';', 'r__'
+  'lang', 'l91', 'r__ = ''abc'' == ''abc'';', 'r__'
+  'lang', 'l92', 'r__ = ''abc'' == ''a'';', 'r__'
+  'lang', 'l93', 'r__ = true + true;', 'r__'
+  'lang', 'l94', 'r__ = true * 3;', 'r__'
+  'lang', 'l95', 'r__ = class(true & true);', 'r__'
+  'lang', 'l96', 'r__ = class(1 & 2);', 'r__'
+  'lang', 'l97', 'r__ = class(''a'' == ''a'');', 'r__'
+  'lang', 'l98', 'r__ = xor(true, [true false]);', 'r__'
+  'lang', 'l99', 'r__ = ~[1 0 2];', 'r__'
+  'lang', 'l100', 'r__ = 3 > 2 > 1;', 'r__'
+  'lang', 'l101', 'r__ = 1 < 2 < 3;', 'r__'
+  'lang', 'l102', 'r__ = [] == [];', 'r__'
+  'lang', 'l103', 'r__ = isempty([] == 1);', 'r__'
+  'lang', 'l104', 'r__ = 1 / 0 - 1 / 0;', 'r__'
+  'lang', 'l105', 'r__ = 0 * Inf;', 'r__'
+  'lang', 'l106', 'r__ = Inf - Inf;', 'r__'
+  'lang', 'l107', 'r__ = mod(-7, 3);', 'r__'
+  'lang', 'l108', 'r__ = rem(-7, 3);', 'r__'
+  'lang', 'l109', 'r__ = mod(7, -3);', 'r__'
+  'lang', 'l110', 'r__ = rem(7, -3);', 'r__'
+  'lang', 'l111', 'r__ = mod(5.5, -2);', 'r__'
+  'lang', 'l112', 'r__ = mod(-1, 1);', 'r__'
+  'lang', 'l113', 'r__ = fix(-7 / 2);', 'r__'
+  'lang', 'l114', 'r__ = round(-7 / 2);', 'r__'
+  'lang', 'l115', 'r__ = [1 2; 3 4] * [5; 6];', 'r__'
+  'lang', 'l116', 'r__ = [1 2; 3 4] .* [5 6; 7 8];', 'r__'
+  'lang', 'l117', 'r__ = [1 2; 3 4] ^ 2;', 'r__'
+  'lang', 'l118', 'r__ = [1 2; 3 4] .^ 2;', 'r__'
+  'lang', 'l119', 'r__ = 2 .^ [1 2; 3 4];', 'r__'
+  'lang', 'l120', 'r__ = [1 2; 3 4] \ [5; 6];', 'r__'
+  'lang', 'l121', 'r__ = [5 6] / [1 2; 3 4];', 'r__'
+  'lang', 'l122', 'r__ = [1 2; 3 4] ^ -1;', 'r__'
+  'lang', 'l123', 'r__ = [4 1; 1 3] ^ 0.5;', 'r__'
+  'lang', 'l124', 'r__ = 2 ^ [1 2; 3 4];', 'r__'
+  'lang', 'l125', 'r__ = (-8) ^ (1/3);', 'r__'
+  'lang', 'l126', 'r__ = [1 2 3] * 2;', 'r__'
+  'lang', 'l127', 'r__ = [1 2 3] / 2;', 'r__'
+  'lang', 'l128', 'r__ = 2 ./ [1 2 4];', 'r__'
+  'lang', 'l129', 'r__ = [2 4] .\ [8 8];', 'r__'
+  'lang', 'l130', 'r__ = true | false;', 'r__'
+  'lang', 'l131', 'r__ = [1 0 1] & [1 1 0];', 'r__'
+  'lang', 'l132', 'r__ = any([0 0 1]);', 'r__'
+  'lang', 'l133', 'r__ = all([1 1 0]);', 'r__'
+  'lang', 'l134', 'r__ = 1e308 * 10;', 'r__'
+  'lang', 'l135', 'r__ = -1e308 * 10;', 'r__'
+  'lang', 'l136', 'r__ = realmax;', 'r__'
+  'lang', 'l137', 'r__ = realmin;', 'r__'
+  'lang', 'l138', '[m, i] = max([3 7 7 1]);', 'i'
+  'lang', 'l139', '[m, i] = min([4 2 2 9]);', 'i'
+  'lang', 'l140', '[m, i] = max([1 NaN 3]);', 'i'
+  'lang', 'l141', '[m, i] = max([NaN NaN]);', 'i'
+  'lang', 'l142', '[m, i] = max(magic(3));', 'i'
+  'lang', 'l143', '[m, i] = max(magic(3), [], 2);', 'i'
+  'lang', 'l144', '[s, i] = sort([3 1 2; 9 7 8], 2);', 'i'
+  'lang', 'l145', '[s, i] = sort([2 1 2 1]);', 'i'
+  'lang', 'l146', '[s, i] = sort([2 1 2 1], ''descend'');', 'i'
+  'lang', 'l147', '[u, i, j] = unique([3 1 3 2]);', 'i'
+  'lang', 'l148', '[u, i, j] = unique([3 1 3 2]);', 'j'
+  'lang', 'l149', '[u, i, j] = unique([3 1 3 2], ''stable'');', 'u'
+  'lang', 'l150', '[u, i] = unique([3 1 3 2], ''last'');', 'i'
+  'lang', 'l151', '[u, i, j] = unique([1 2; 1 2; 3 4], ''rows'');', 'u'
+  'lang', 'l152', '[tf, loc] = ismember([1 5 3], [3 1 1]);', 'loc'
+  'lang', 'l153', '[tf, loc] = ismember({''a'', ''z''}, {''z'', ''a''});', 'loc'
+  'lang', 'l154', '[r, c] = find([0 1; 1 0]);', 'c'
+  'lang', 'l155', '[r, c, v] = find([0 2; 3 0]);', 'v'
+  'lang', 'l156', '[q, r] = deconv([1 5 6], [1 2]);', 'r'
+  'lang', 'l157', '[n, x] = hist([1 2 2 3 3 3]);', 'x'
+  'lang', 'l158', '[n, x] = hist([1 2 2 3 3 3], 3);', 'n'
+  'lang', 'l159', '[r, c] = size(ones(2, 3, 1));', 'c'
+  'lang', 'l160', '[a, b, c] = size(ones(2, 3));', 'c'
+  'lang', 'l161', 'r__ = n = size(ones(2, 3), 3);', 'r__'
+  'lang', 'l162', '[q, r] = qr([1 2; 3 4], 0);', 'q'
+  'lang', 'l163', '[f, e] = log2([1 0.5 10]);', 'e'
+  'lang', 'l164', '[n, d] = rat([0.5 0.333]);', 'd'
+  'lang', 'l165', '[c, ia, ib] = intersect([1 2 3], [3 1]);', 'ib'
+  'lang', 'l166', '[c, ia] = setdiff([5 4 3], 4);', 'ia'
+  'lang', 'l167', 'r__ = sort([3 1 2], 2, ''descend'');', 'r__'
+  'lang', 'l168', 'r__ = sort({''b'', ''a'', ''C''});', 'r__'
+  'lang', 'l169', 'r__ = sort(''hello'');', 'r__'
+  'lang', 'l170', 'r__ = unique({''b'', ''a'', ''b''});', 'r__'
+  'lang', 'l171', 'r__ = unique([1 NaN NaN]);', 'r__'
+  'lang', 'l172', 'r__ = max([1 2; 3 4], [], 1);', 'r__'
+  'lang', 'l173', 'r__ = sum([1 2; 3 4], 2);', 'r__'
+  'lang', 'l174', 'r__ = cumsum([1 2 3], 2);', 'r__'
+  'lang', 'l175', 'r__ = mean([1 2; 3 4], 1);', 'r__'
+  'lang', 'l176', 'r__ = any([0 0; 0 1], 2);', 'r__'
+  'lang', 'l177', 'r__ = prod([1 2; 3 4], 2);', 'r__'
+  'lang', 'l178', 'r__ = strsplit(''a b  c'');', 'r__'
+  'lang', 'l179', 'r__ = strsplit(''a-b_c'', {''-'', ''_''});', 'r__'
+  'lang', 'l180', 'r__ = strjoin({''a'', ''b''});', 'r__'
+  'lang', 'l181', 'r__ = regexp(''abc123def'', ''\d+'', ''match'');', 'r__'
+  'lang', 'l182', 'r__ = regexp(''abc123'', ''(\w)(\d)'', ''tokens'');', 'r__'
+  'lang', 'l183', 'r__ = regexp(''key=val'', ''(?<k>\w+)=(?<v>\w+)'', ''names'');', 'r__'
+  'lang', 'l184', 'r__ = regexp(''a1b2'', ''\d'', ''split'');', 'r__'
+  'lang', 'l185', 'r__ = regexp(''aaa'', ''a'', ''once'');', 'r__'
+  'lang', 'l186', 'r__ = regexprep(''hello world'', ''(\w+) (\w+)'', ''$2 $1'');', 'r__'
+  'lang', 'l187', 'r__ = regexprep(''abc'', ''(.)'', ''$1$1'');', 'r__'
+  'lang', 'l188', 'r__ = regexpi(''ABC'', ''b'', ''match'');', 'r__'
+  'lang', 'l189', 'r__ = strtrim({'' a '', ''b ''});', 'r__'
+  'lang', 'l190', 'r__ = upper(''mixed Case 1'');', 'r__'
+  'lang', 'l191', 'r__ = fliplr(''abc'');', 'r__'
+  'lang', 'l192', 'r__ = strcat(''a '', ''b '');', 'r__'
+  'lang', 'l193', 'r__ = strcat({''a ''}, ''b '');', 'r__'
+  'lang', 'l194', 'r__ = [''a '', ''b ''];', 'r__'
+  'lang', 'l195', 'r__ = char(''a'', '''', ''bcd'');', 'r__'
+  'lang', 'l196', 'r__ = num2str([1.5 2; 3 4.25]);', 'r__'
+  'lang', 'l197', 'r__ = num2str(-0.000123);', 'r__'
+  'lang', 'l198', 'r__ = num2str(123456.789);', 'r__'
+  'lang', 'l199', 'r__ = num2str(1e15);', 'r__'
+  'lang', 'l200', 'r__ = num2str(1e16);', 'r__'
+  'lang', 'l201', 'r__ = num2str(0.1);', 'r__'
+  'lang', 'l202', 'r__ = num2str([0.1 0.22 0.333]);', 'r__'
+  'lang', 'l203', 'r__ = num2str(pi, 10);', 'r__'
+  'lang', 'l204', 'r__ = num2str(true);', 'r__'
+  'lang', 'l205', 'r__ = num2str([1 2 3]'');', 'r__'
+  'lang', 'l206', 'r__ = mat2str([1 -2.5; NaN Inf]);', 'r__'
+  'lang', 'l207', 'r__ = mat2str(pi, 4);', 'r__'
+  'lang', 'l208', 'r__ = mat2str([true false]);', 'r__'
+  'lang', 'l209', 'r__ = mat2str(''it''''s'');', 'r__'
+  'lang', 'l210', 'r__ = mat2str(magic(3) > 4);', 'r__'
+  'lang', 'l211', 'r__ = int2str(-0.5);', 'r__'
+  'lang', 'l212', 'r__ = int2str(0.5);', 'r__'
+  'lang', 'l213', 'r__ = int2str(1.5);', 'r__'
+  'lang', 'l214', 'r__ = sprintf(''%d'', [1 2 3]);', 'r__'
+  'lang', 'l215', 'r__ = sprintf(''%d-%d\n'', [1 2; 3 4]);', 'r__'
+  'lang', 'l216', 'r__ = sprintf(''%5.2f|'', pi);', 'r__'
+  'lang', 'l217', 'r__ = sprintf(''%-8s|'', ''ab'');', 'r__'
+  'lang', 'l218', 'r__ = sprintf(''%08.3f'', -pi);', 'r__'
+  'lang', 'l219', 'r__ = sprintf(''%+d %+d'', 5, -5);', 'r__'
+  'lang', 'l220', 'r__ = sprintf(''%e'', 12345.6789);', 'r__'
+  'lang', 'l221', 'r__ = sprintf(''%E'', 0.000123);', 'r__'
+  'lang', 'l222', 'r__ = sprintf(''%g %g %g'', 1e-5, 1e5, 123456789);', 'r__'
+  'lang', 'l223', 'r__ = sprintf(''%G'', 1e-10);', 'r__'
+  'lang', 'l224', 'r__ = sprintf(''%x %X %o'', 255, 255, 8);', 'r__'
+  'lang', 'l225', 'r__ = sprintf(''%c%c%c'', 72, 105, 33);', 'r__'
+  'lang', 'l226', 'r__ = sprintf(''%s'', ''abc'', ''def'');', 'r__'
+  'lang', 'l227', 'r__ = sprintf(''%s=%d '', ''a'', 1, ''b'', 2);', 'r__'
+  'lang', 'l228', 'r__ = sprintf(''%d %s'', 1, ''x'', 2);', 'r__'
+  'lang', 'l229', 'r__ = sprintf(''%5s|%-5s|'', ''a'', ''b'');', 'r__'
+  'lang', 'l230', 'r__ = sprintf(''%.3s'', ''abcdef'');', 'r__'
+  'lang', 'l231', 'r__ = sprintf(''%d'', 1.5);', 'r__'
+  'lang', 'l232', 'r__ = sprintf(''%i'', -3);', 'r__'
+  'lang', 'l233', 'r__ = sprintf(''%u'', 7);', 'r__'
+  'lang', 'l234', 'r__ = sprintf(''%f'', NaN);', 'r__'
+  'lang', 'l235', 'r__ = sprintf(''%d'', Inf);', 'r__'
+  'lang', 'l236', 'r__ = sprintf(''%5.1f'', -Inf);', 'r__'
+  'lang', 'l237', 'r__ = sprintf(''%d %%'', 50);', 'r__'
+  'lang', 'l238', 'r__ = sprintf(''a\tb'');', 'r__'
+  'lang', 'l239', 'r__ = sprintf(''%*d'', 5, 3);', 'r__'
+  'lang', 'l240', 'r__ = sprintf(''%.*f'', 2, pi);', 'r__'
+  'lang', 'l241', 'r__ = sprintf(''%#o %#x'', 8, 255);', 'r__'
+  'lang', 'l242', 'r__ = sprintf(''% d'', 5);', 'r__'
+  'lang', 'l243', 'r__ = sprintf(''%s'', 65);', 'r__'
+  'lang', 'l244', 'r__ = sprintf(''%d'', ''a'');', 'r__'
+  'lang', 'l245', 'r__ = sprintf(''%f'', true);', 'r__'
+  'lang', 'l246', 'r__ = sprintf('''');', 'r__'
+  'lang', 'l247', 'r__ = sprintf(''%d'', []);', 'r__'
+  'lang', 'l248', 'r__ = sprintf(''%.0f %.0f %.0f'', 0.5, 1.5, 2.5);', 'r__'
+  'lang', 'l249', 'r__ = sprintf(''%.2f'', 2.675);', 'r__'
+  'lang', 'l250', 'r__ = sprintf(''%.1f'', 0.05);', 'r__'
+  'lang', 'l251', 'r__ = sprintf(''%10.4e'', 1);', 'r__'
+  'lang', 'l252', 'r__ = sprintf(''%g'', 100000);', 'r__'
+  'lang', 'l253', 'r__ = sprintf(''%g'', 1000000);', 'r__'
+  'lang', 'l254', 'r__ = sprintf(''%g'', 0.0001);', 'r__'
+  'lang', 'l255', 'r__ = sprintf(''%g'', 0.00001);', 'r__'
+  'lang', 'l256', 'r__ = str2num(''[1 2; 3 4]'');', 'r__'
+  'lang', 'l257', 'r__ = str2num(''3+4'');', 'r__'
+  'lang', 'l258', 'r__ = str2double(''1e-3'');', 'r__'
+  'lang', 'l259', 'r__ = str2double('' 42 '');', 'r__'
+  'lang', 'l260', 'r__ = str2double(''1 2'');', 'r__'
+  'lang', 'l261', 'r__ = str2double(''.5'');', 'r__'
+  'lang', 'l262', 'r__ = str2double(''-.5e2'');', 'r__'
+  'lang', 'l263', 'r__ = num2str(str2double(''7''));', 'r__'
+  'lang', 'l264', 'r__ = strcmp({''a'', ''b''}, {''a'', ''c''});', 'r__'
+  'lang', 'l265', 'r__ = strncmp(''abcdef'', ''abcxyz'', 3);', 'r__'
+  'lang', 'l266', 'r__ = strncmpi(''ABCdef'', ''abcxyz'', 3);', 'r__'
+  'lang', 'l267', 'r__ = isspace(''a b'');', 'r__'
+  'lang', 'l268', 'r__ = isletter(''a1B'');', 'r__'
+  'lang', 'l269', 'r__ = isstrprop(''a1 '', ''digit'');', 'r__'
+  'lang', 'l270', 'r__ = lower({''AB'', ''Cd''});', 'r__'
+  'lang', 'l271', 'r__ = blanks(3);', 'r__'
+  'lang', 'l272', 'r__ = deblank(''ab   '');', 'r__'
+  'lang', 'l273', 'r__ = fliplr('''');', 'r__'
+  'lang', 'l274', 'r__ = double(''é'');', 'r__'
+  'lang', 'l275', 'r__ = char(233);', 'r__'
+  'lang', 'l276', 'r__ = dec2bin(10);', 'r__'
+  'lang', 'l277', 'r__ = bin2dec(''1010'');', 'r__'
+  'lang', 'l278', 'r__ = dec2hex(255);', 'r__'
+  'lang', 'l279', 'r__ = hex2dec(''FF'');', 'r__'
+  'lang', 'l280', 'r__ = floor(-0.5);', 'r__'
+  'lang', 'l281', 'r__ = round(0.49999999999999994);', 'r__'
+  'lang', 'l282', 'r__ = round(-2.5);', 'r__'
+  'lang', 'l283', 'r__ = fix(-2.5);', 'r__'
+  'lang', 'l284', 'r__ = abs(-0);', 'r__'
+  'lang', 'l285', 'r__ = sign(-0);', 'r__'
+  'lang', 'l286', 'r__ = 1 / -0;', 'r__'
+  'lang', 'l287', 'r__ = atan2(0, -0);', 'r__'
+  'lang', 'l288', 'r__ = sqrt(-0);', 'r__'
+  'lang', 'l289', 'r__ = max(NaN, 1);', 'r__'
+  'lang', 'l290', 'r__ = min([NaN 1 NaN]);', 'r__'
+  'lang', 'l291', 'r__ = sum([]);', 'r__'
+  'lang', 'l292', 'r__ = sum([], 1);', 'r__'
+  'lang', 'l293', 'r__ = sum([], 2);', 'r__'
+  'lang', 'l294', 'r__ = sum(zeros(0, 3), 2);', 'r__'
+  'lang', 'l295', 'r__ = prod(zeros(0, 3));', 'r__'
+  'lang', 'l296', 'r__ = mean(zeros(0, 3));', 'r__'
+  'lang', 'l297', 'r__ = max(zeros(0, 3), [], 2);', 'r__'
+  'lang', 'l298', 'r__ = cumsum(zeros(2, 0));', 'r__'
+  'lang', 'l299', 'r__ = any(zeros(0, 3));', 'r__'
+  'lang', 'l300', 'r__ = eps(1e10);', 'r__'
+  'lang', 'l301', 'r__ = eps(-1);', 'r__'
+  'lang', 'l302', 'r__ = eps(Inf);', 'r__'
+  'lang', 'l303', 'r__ = eps(NaN);', 'r__'
+  'lang', 'l304', 'r__ = nextpow2(1000);', 'r__'
+  'lang', 'l305', 'r__ = nextpow2(0);', 'r__'
+  'lang', 'l306', 'r__ = factorial(171);', 'r__'
+  'lang', 'l307', 'r__ = factorial(170);', 'r__'
+  'lang', 'l308', 'r__ = nchoosek(30, 15);', 'r__'
+  'lang', 'l309', 'r__ = gamma(171.5);', 'r__'
+  'lang', 'l310', 'r__ = exp(710);', 'r__'
+  'lang', 'l311', 'r__ = log(0);', 'r__'
+  'lang', 'l312', 'r__ = log(-0);', 'r__'
+  'lang', 'l313', 'r__ = log10(-10);', 'r__'
+  'lang', 'l314', 'r__ = sqrt(-4) * 1i;', 'r__'
+  'lang', 'l315', 'r__ = (1+2i) * (3-4i);', 'r__'
+  'lang', 'l316', 'r__ = (1+2i) / (3-4i);', 'r__'
+  'lang', 'l317', 'r__ = abs(3+4i);', 'r__'
+  'lang', 'l318', 'r__ = angle(-1-0i);', 'r__'
+  'lang', 'l319', 'r__ = conj([1+2i 3]);', 'r__'
+  'lang', 'l320', 'r__ = real(''a'');', 'r__'
+  'lang', 'l321', 'r__ = imag(5);', 'r__'
+  'lang', 'l322', 'r__ = complex(1, 0) == 1;', 'r__'
+  'lang', 'l323', 'r__ = isreal(complex(1, 0) + 0);', 'r__'
+  'lang', 'l324', 'r__ = isreal([1+0i 2]);', 'r__'
+  'lang', 'l325', 'r__ = isreal(sqrt(-1) * 0);', 'r__'
+  'lang', 'l326', 'r__ = 1i^2;', 'r__'
+  'lang', 'l327', 'r__ = exp(1i * pi);', 'r__'
+  'lang', 'l328', 'r__ = linspace(0, 1, 3)'';', 'r__'
+  'lang', 'l329', 'r__ = linspace(1, 0, 3);', 'r__'
+  'lang', 'l330', 'r__ = colon(1, 3);', 'r__'
+  'lang', 'l331', 'r__ = det([1 2; 3 4]);', 'r__'
+  'lang', 'l332', 'r__ = inv([1 2; 3 4]);', 'r__'
+  'lang', 'l333', 'r__ = rank([1 2; 2 4]);', 'r__'
+  'lang', 'l334', 'r__ = trace([1 2; 3 4]);', 'r__'
+  'lang', 'l335', 'r__ = norm([1 2; 3 4]);', 'r__'
+  'lang', 'l336', 'r__ = norm([1 2 3], 1);', 'r__'
+  'lang', 'l337', 'r__ = norm([1 2 3], Inf);', 'r__'
+  'lang', 'l338', 'r__ = norm([1 2 3], -Inf);', 'r__'
+  'lang', 'l339', 'r__ = cond([1 2; 3 4]);', 'r__'
+  'lang', 'l340', 'r__ = kron(eye(2), [1 2]);', 'r__'
+  'lang', 'l341', 'r__ = cross([1 2 3], [4 5 6]);', 'r__'
+  'lang', 'l342', 'r__ = dot([1 2; 3 4], [1 2; 3 4]);', 'r__'
+  'lang', 'l343', 'r__ = triu(magic(4), -1);', 'r__'
+  'lang', 'l344', 'r__ = tril(magic(4), 1);', 'r__'
+  'lang', 'l345', 'r__ = diag(magic(3), -1);', 'r__'
+  'lang', 'l346', 'r__ = trace(magic(4));', 'r__'
+  'lang', 'l347', 'r__ = expm(zeros(2));', 'r__'
+  'lang', 'l348', 'r__ = polyfit(1:5, [2 4 6 8 10], 1);', 'r__'
+  'lang', 'l349', 'r__ = polyval([1 2 3], 2);', 'r__'
+  'lang', 'l350', 'r__ = roots([1 -3 2]);', 'r__'
+  'lang', 'l351', 'r__ = conv([1 2], [1 3]);', 'r__'
+  'lang', 'l352', 'r__ = filter([1 1], 1, [1 2 3]);', 'r__'
+  'lang', 'l353', 'r__ = filter(1, [1 -0.5], [1 0 0]);', 'r__'
+  'lang', 'l354', 'r__ = interp1([1 2 3], [4 5 6], 1.5);', 'r__'
+  'lang', 'l355', 'r__ = cumprod([1 2 3 4]);', 'r__'
+  'lang', 'l356', 'r__ = diff([1 4 9], 1, 2);', 'r__'
+  'lang', 'l357', 'r__ = trapz([0 1 2], [0 1 4]);', 'r__'
+  'lang', 'l358', 'r__ = histc([1 2 2 3 5], 1:5);', 'r__'
+  'lang', 'l359', 'r__ = accumarray([1; 2; 1], [10; 20; 30]);', 'r__'
+  'lang', 'l360', 'r__ = median([3 1 2; 6 5 4]);', 'r__'
+  'lang', 'l361', 'r__ = mode([1 1 2 2]);', 'r__'
+  'lang', 'l362', 'r__ = var([1 2 3 4], 1);', 'r__'
+  'lang', 'l363', 'r__ = std([1 2; 3 4]);', 'r__'
+  'lang', 'l364', 'r__ = var([2 4 4 4 5 5 7 9], [], 2);', 'r__'
+  'lang', 'l365', 'r__ = cov([1 2 3], [1 2 4]);', 'r__'
+  'lang', 'l366', 'r__ = corrcoef([1 2 3], [3 2 1]);', 'r__'
+  'lang', 'l367', 'r__ = primes(30);', 'r__'
+  'lang', 'l368', 'r__ = isprime([2 4 97]);', 'r__'
+  'lang', 'l369', 'r__ = factor(84);', 'r__'
+  'lang', 'l370', 'r__ = gcd([12 15], 9);', 'r__'
+  'langerr', 'le1', 'x = [1 2 3]; x(1.5) = 1;', ''
+  'langerr', 'le2', 'x = [1 2 3]; x(-1);', ''
+  'langerr', 'le3', 'x = [1 2 3]; x(0) = 1;', ''
+  'langerr', 'le4', 'A = magic(3); A(:, 4);', ''
+  'langerr', 'le5', 'A = magic(3); A(4, :);', ''
+  'langerr', 'le6', 'A = magic(3); A(1, 2, 3);', ''
+  'langerr', 'le7', 'A = magic(3); A([1 2], :) = [1 2 3];', ''
+  'langerr', 'le8', 'x = 1:3; x(5) = [];', ''
+  'langerr', 'le9', 'A = magic(3); A(2, 2) = [];', ''
+  'langerr', 'le10', 'c = {1}; c{2};', ''
+  'langerr', 'le11', 'c = {1, 2}; x = c{:};', ''
+  'langerr', 'le12', 's.a = 1; s(3).b;', ''
+  'langerr', 'le13', 's = struct(''a'', {1, 2}); s.a;', ''
+  'langerr', 'le14', 's = 5; s.a = 1;', ''
+  'langerr', 'le15', 'x = ''abc''; x.y;', ''
+  'langerr', 'le16', 'f = @(x) x; f.a;', ''
+  'langerr', 'le17', 'x = {1} + 1;', ''
+  'langerr', 'le18', 'x = struct(''a'', 1) + 1;', ''
+  'langerr', 'le19', 'x = @sin + 1;', ''
+  'langerr', 'le20', '[1 2 3] * [4 5 6];', ''
+  'langerr', 'le21', '[1 2] + [1 2 3]'';', ''
+  'langerr', 'le22', 'ones(2, 3) \ ones(3, 1);', ''
+  'langerr', 'le23', '[1 2; 3 4] ^ [1 2];', ''
+  'langerr', 'le24', 'x = [1, 2; 3];', ''
+  'langerr', 'le25', 'x = [[1 2]; [3 4 5]];', ''
+  'langerr', 'le26', 'x = {1, 2; 3};', ''
+  'langerr', 'le27', 'undefined_thing + 1;', ''
+  'langerr', 'le28', 'sin;', ''
+  'langerr', 'le29', 'sin();', ''
+  'langerr', 'le30', 'sin(1, 2, 3);', ''
+  'langerr', 'le31', 'zeros(-1);', ''
+  'langerr', 'le32', 'ones(2, ''foo'');', ''
+  'langerr', 'le33', 'cell(''a'');', ''
+  'langerr', 'le34', 'magic(''a'', 2);', ''
+  'langerr', 'le35', 'str2func(5);', ''
+  'langerr', 'le36', 'feval(''nonexistent_fn'');', ''
+  'langerr', 'le37', 'error(''Custom message'');', ''
+  'langerr', 'le38', 'error(''a:b'', ''With id %d'', 3);', ''
+  'langerr', 'le39', 'error(''%s'', ''percent'');', ''
+  'langerr', 'le40', 'error(struct(''message'', ''from struct'', ''identifier'', ''x:y''));', ''
+  'langerr', 'le41', 'assert(false);', ''
+  'langerr', 'le42', 'assert(false, ''fail %d'', 2);', ''
+  'langerr', 'le43', 'x = 1; x{1} = 2;', ''
+  'langerr', 'le44', 'x = [1 2 3]; x(4);', ''
+  'langerr', 'le45', 'x = 5; x(2, 2);', ''
+  'langerr', 'le46', 'q = zeros(2); q(5);', ''
+  'langerr', 'le47', 'n = numel(1, 2, 3, 4);', ''
+  'langerr', 'le48', 'strcat(1, {2});', ''
+  'langerr', 'le49', 'cell2mat({1, ''a''});', ''
+  'langerr', 'le50', 'fieldnames(5);', ''
+  'langerr', 'le51', 'if [1 0], end;', ''
+  'langerr', 'le52', 'while [], end, x = 1;', ''
+  'langerr', 'le53', 'switch {1}, case 1, end;', ''
+  'langerr', 'le54', 'for k = {1, 2}, end, x = k;', ''
+  'langerr', 'le55', 'x = 1; x(:, :, 2);', ''
 };
 for k = 1:size(cases, 1)
   writeCase(fid, cases{k, 1}, cases{k, 2}, cases{k, 3}, cases{k, 4});
@@ -491,7 +918,6 @@ sweep = {
   'angle', false
   'any', true
   'anynan', true
-  'arg', false
   'arrayfun', true
   'asec', false
   'asecd', false
@@ -512,13 +938,13 @@ sweep = {
   'cat', true
   'ceil', false
   'cell', true
-  'cell2mat', true
+  'cell2mat', false
   'cellfun', true
-  'cellstr', true
+  'cellstr', false
   'char', true
   'chol', true
   'circshift', true
-  'class', true
+  'class', false
   'colon', true
   'complex', true
   'cond', true
@@ -538,7 +964,7 @@ sweep = {
   'csc', false
   'cscd', false
   'csch', false
-  'ctranspose', true
+  'ctranspose', false
   'cummax', true
   'cummin', true
   'cumprod', true
@@ -546,26 +972,26 @@ sweep = {
   'cumtrapz', true
   'deconv', true
   'deg2rad', false
-  'det', true
+  'det', false
   'diag', true
   'diff', true
   'discretize', true
   'dot', true
-  'double', true
+  'double', false
   'eig', true
   'endsWith', true
   'eq', true
-  'erf', true
-  'erfc', true
-  'erfcinv', true
-  'erfcx', true
-  'erfinv', true
+  'erf', false
+  'erfc', false
+  'erfcinv', false
+  'erfcx', false
+  'erfinv', false
   'exp', false
-  'expm', true
+  'expm', false
   'expm1', false
   'eye', true
-  'factor', true
-  'factorial', true
+  'factor', false
+  'factorial', false
   'fft', true
   'fft2', true
   'fftshift', true
@@ -576,13 +1002,13 @@ sweep = {
   'find', true
   'fix', false
   'flip', true
-  'fliplr', true
-  'flipud', true
+  'fliplr', false
+  'flipud', false
   'floor', false
   'func2str', true
-  'gamma', true
+  'gamma', false
   'gammainc', true
-  'gammaln', true
+  'gammaln', false
   'gcd', true
   'ge', true
   'getfield', true
@@ -596,53 +1022,53 @@ sweep = {
   'ifftshift', true
   'imag', false
   'ind2sub', true
-  'int2str', true
+  'int2str', false
   'interp1', true
   'interp2', true
   'intersect', true
-  'inv', true
+  'inv', false
   'ipermute', true
   'isa', true
-  'iscell', true
-  'iscellstr', true
-  'ischar', true
-  'iscolumn', true
+  'iscell', false
+  'iscellstr', false
+  'ischar', false
+  'iscolumn', false
   'iscomplex', true
-  'isempty', true
+  'isempty', false
   'isequal', true
   'isequaln', true
   'isfield', true
-  'isfinite', true
-  'isinf', true
-  'islogical', true
-  'ismatrix', true
+  'isfinite', false
+  'isinf', false
+  'islogical', false
+  'ismatrix', false
   'ismember', true
   'ismissing', true
-  'isnan', true
-  'isnumeric', true
-  'isprime', true
-  'isreal', true
-  'isrow', true
-  'isscalar', true
+  'isnan', false
+  'isnumeric', false
+  'isprime', false
+  'isreal', false
+  'isrow', false
+  'isscalar', false
   'issorted', true
-  'isstruct', true
-  'isvector', true
+  'isstruct', false
+  'isvector', false
   'kron', true
   'lcm', true
   'ldivide', true
   'le', true
-  'length', true
+  'length', false
   'linspace', true
   'log', false
   'log10', false
   'log1p', false
   'log2', false
-  'logical', true
+  'logical', false
   'logspace', true
-  'lower', true
+  'lower', false
   'lt', true
   'lu', true
-  'magic', true
+  'magic', false
   'mat2str', true
   'max', true
   'mean', true
@@ -667,13 +1093,13 @@ sweep = {
   'mtimes', true
   'nchoosek', true
   'ndgrid', true
-  'ndims', true
+  'ndims', false
   'ne', true
-  'nextpow2', true
-  'nnz', true
+  'nextpow2', false
+  'nnz', false
   'norm', true
   'normalize', true
-  'not', true
+  'not', false
   'nthroot', true
   'null', true
   'num2cell', true
@@ -684,7 +1110,7 @@ sweep = {
   'or', true
   'orth', true
   'pchip', true
-  'perms', true
+  'perms', false
   'permute', true
   'pinv', true
   'plus', true
@@ -696,7 +1122,7 @@ sweep = {
   'power', true
   'ppval', true
   'prctile', true
-  'primes', true
+  'primes', false
   'prod', true
   'psi', true
   'qr', true
@@ -708,9 +1134,9 @@ sweep = {
   'rats', true
   'rdivide', true
   'real', false
-  'reallog', true
+  'reallog', false
   'realpow', true
-  'realsqrt', true
+  'realsqrt', false
   'regexp', true
   'regexpi', true
   'regexprep', true
@@ -720,7 +1146,7 @@ sweep = {
   'reshape', true
   'rmfield', true
   'rmmissing', true
-  'roots', true
+  'roots', false
   'rot90', true
   'round', false
   'sec', false
@@ -739,12 +1165,12 @@ sweep = {
   'spline', true
   'sprintf', true
   'sqrt', false
-  'sqrtm', true
-  'squeeze', true
+  'sqrtm', false
+  'squeeze', false
   'standardizeMissing', true
   'startsWith', true
   'std', true
-  'str2double', true
+  'str2double', false
   'strcat', true
   'strcmp', true
   'strcmpi', true
@@ -752,7 +1178,7 @@ sweep = {
   'strjoin', true
   'strrep', true
   'strsplit', true
-  'strtrim', true
+  'strtrim', false
   'struct', true
   'struct2cell', true
   'sub2ind', true
@@ -762,17 +1188,17 @@ sweep = {
   'tand', false
   'tanh', false
   'times', true
-  'trace', true
-  'transpose', true
+  'trace', false
+  'transpose', false
   'trapz', true
   'tril', true
   'triu', true
-  'uminus', true
+  'uminus', false
   'union', true
   'unique', true
-  'unmkpp', true
-  'uplus', true
-  'upper', true
+  'unmkpp', false
+  'uplus', false
+  'upper', false
   'var', true
   'vecnorm', true
   'vertcat', true
@@ -905,6 +1331,20 @@ writeDisplay(fid, 'containers.m', {
   'g = @sin'
   'e = struct()'
 });
+writeDisplay(fid, 'containers2.m', {
+  's.a = 1;'
+  's.b = ''text'';'
+  's.c = [1 2 3];'
+  's.d = {1, ''two''};'
+  's.e.inner = 5;'
+  's'
+  't = struct(''x'', {1, 2})'
+  't(2)'
+  'u = struct(''m'', magic(3))'
+  'v = struct(''e'', {})'
+  'w.f = @(x) x + 1;'
+  'w'
+});
 writeDisplay(fid, 'empties.m', {
   'e = []'
   'z3 = zeros(0, 3)'
@@ -923,6 +1363,21 @@ writeDisplay(fid, 'formats.m', {
   'p = pi'
   '3 + 4'
   'ans * 2'
+});
+writeDisplay(fid, 'formats2.m', {
+  'format long'
+  'a = [pi; exp(1)]'
+  'b = 1e-5'
+  'c = [1 1e6]'
+  'format short g'
+  'e = [pi 1e6 1e-6]'
+  'f = 123456789'
+  'format long g'
+  'g = pi'
+  'h = [1/3 1e10]'
+  'format short e'
+  'k = pi'
+  'format short'
 });
 writeDisplay(fid, 'numeric.m', {
   'x = 5'
@@ -948,6 +1403,30 @@ writeDisplay(fid, 'numeric.m', {
   'c2 = [1+2i 3-4.5i]'
   'c3 = sqrt(-2)'
 });
+writeDisplay(fid, 'numeric2.m', {
+  'a = -5'
+  'b = [1 -1]'
+  'c = [100 2]'
+  'd = [1000 2]'
+  'e = [99999 1]'
+  'f = 123456789'
+  'g = 1e9'
+  'h = [1 2.5 NaN]'
+  'k = [1e-5 1]'
+  'm = [1e5 1.5]'
+  'n = -0.5'
+  'p = [0.001 -0.002]'
+  'q = 1e-10'
+  'r = [1;2.5;-3]'
+  's = [1e10 1]'
+  't = [-1e5 2.5]'
+  'u = 0.1 + 0.2'
+  'v = [NaN NaN]'
+  'w = [Inf -Inf]'
+  'x = -Inf'
+  'y = 1/3'
+  'z = [1/3 2/3; 1 4/3]'
+});
 writeDisplay(fid, 'text.m', {
   't = true'
   'tf = [true false; false true]'
@@ -959,6 +1438,21 @@ writeDisplay(fid, 'text.m', {
   'fprintf(''%d apples, %.2f pears\n'', 3, 2.5)'
   'fprintf(''%s|'', ''a'', ''bc''); fprintf(''\n'')'
   'x = sprintf(''%5.1f'', [1.25 -2.5])'
+});
+writeDisplay(fid, 'text2.m', {
+  'a = ''a'''
+  'b = [''ab''; ''cd'']'
+  'c = '''''''''
+  'd = {''ab'', 1; [], {}}'
+  'e = {[1 2 3], ''long text here''; true, @sin}'
+  'f = true(2)'
+  'g = [true; false]'
+  'h = ''tab	in'''
+  'k = {}'
+  'm = cell(2, 1)'
+  'n = {''''}'
+  'p = num2str(pi)'
+  'q = repmat(''-'', 1, 10)'
 });
 format short
 format loose

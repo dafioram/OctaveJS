@@ -48,9 +48,9 @@ than a marketing description.
   esbuild to bundle `src/ui/main.js` and everything it imports —
   math.js, Plotly, Papa Parse, CodeMirror 6 — into `dist/main.js`, with
   `dist/index.html` and `dist/styles.css` copied alongside it).
-- **Running the interpreter's own test suite:** `npm test` (fifteen test
-  files: about 1,700 checks plus a 60,000-call sweep of every builtin,
-  under a minute; see `test/` and
+- **Running the interpreter's own test suite:** `npm test` (sixteen test
+  files: about 1,700 checks, a 60,000-call sweep of every builtin and
+  17,500 cases checked against real MATLAB, under a minute; see `test/` and
   [Testing](#testing) below). `npm run coverage` adds a code-coverage
   report (`coverage/index.html`).
 
@@ -297,13 +297,12 @@ assuming — two gaps turned out to matter:
   real, tested implementations — just not as battle-hardened as LAPACK
   (what real MATLAB and NumPy ultimately call) for very large or
   extremely ill-conditioned matrices.
-- **`A\b` for non-square `A`** (least-squares) is solved via the normal
-  equations (`A'A x = A'b`), because math.js's `lusolve` only handles
-  square systems directly. This is a real, working least-squares solve,
-  but it's less numerically stable than the QR-based approach real
-  MATLAB's `mldivide` uses, particularly for ill-conditioned or
-  nearly-rank-deficient `A`. It's fine for typical well-posed
-  overdetermined systems.
+- **`A\b` for non-square `A`** uses Householder QR with column pivoting
+  (LAPACK's conventions), as MATLAB's `mldivide` does: the least-squares
+  solution for tall `A` and MATLAB's basic solution (with its "Rank
+  deficient" warning) for wide or rank-deficient `A`. `qr` (with
+  MATLAB's signs, economy size and pivoting), `polyfit` and `pinv` (from
+  the SVD, complex input included) use the same code.
 - **`eig` of nonsymmetric matrices, `lu` and `fft` are our own.** The
   test suite's property checks found that math.js's `eigs` can fail to
   converge (e.g. on the companion matrix `roots` builds for a degree-15
@@ -317,12 +316,12 @@ assuming — two gaps turned out to matter:
   eigenvalue order and unit-norm eigenvectors; `lu` is LAPACK-style
   partial pivoting (also rectangular, complex and `'vector'`); `fft` is
   radix-2 with Bluestein's algorithm for other lengths, O(n log n) and
-  accurate to about 1e-13. Symmetric `eig`, complex `eig`, `qr`,
-  `expm`, `sqrtm` and `pinv` still use math.js.
+  accurate to about 1e-13. Symmetric `eig`, complex `eig`, `expm` and
+  `sqrtm` still use math.js.
 
 ## Testing
 
-`npm test` runs fifteen files. Besides the per-feature tests, five kinds
+`npm test` runs sixteen files. Besides the per-feature tests, six kinds
 of test lock in behavior across the whole library:
 
 - **Robustness sweep** (`run_tests12.mjs`): every registered builtin is
@@ -342,10 +341,16 @@ of test lock in behavior across the whole library:
 - **Property tests** (`run_tests15.mjs`): identities checked on seeded
   random inputs of many sizes, such as `ifft(fft(x)) == x`, `P*A == L*U`,
   `U*S*V' == A`, `A*V == V*D`, the set identities and text round trips.
-- **Real MATLAB** (`tools/matlab/`): `matweb_reference.m` records what
-  MATLAB returns for all of the above (about 26,000 cases), and
-  `compare-reference.mjs` lists every difference from MatWeb. See
-  `tools/matlab/README.md`.
+- **Real MATLAB** (`run_tests16.mjs`, `tools/matlab/`): `matweb_reference.m`
+  records what MATLAB returns for all of the above and more (about
+  23,000 cases); the recording from MATLAB R2015a is checked in
+  (`tools/matlab/reference/R2015a.txt`). The test compares MatWeb with it
+  case by case: about 17,500 cases match MATLAB exactly and are locked in,
+  and every remaining difference is listed with its reason in
+  `R2015a-known.json` (mostly inputs MATLAB rejects and MatWeb accepts,
+  and behavior that changed after R2015a, where MatWeb follows current
+  MATLAB). A new difference, or a listed one that starts matching, fails
+  the test. See `tools/matlab/README.md`.
 
 ## The `.mat` file: what "rudimentary" means here
 
@@ -416,10 +421,11 @@ src/ui/         main.js, backend.js, vfs.js, matlab-lang.js, styles.css
                   fallback) backend, the IndexedDB file store, CodeMirror
                   setup, drawing figures with Plotly. Everything here is what actually
                   needs a browser; everything above it is plain, testable JS.
-test/           harness.js + fifteen test files, contracts-data.mjs and
+test/           harness.js + sixteen test files, contracts-data.mjs and
                 display/ snapshots — run with `npm test` (see Testing).
-tools/matlab/   matweb_reference.m and the scripts that generate it and
-                compare MatWeb against its output from real MATLAB.
+tools/matlab/   matweb_reference.m, the scripts that generate it and
+                compare MatWeb against its output from real MATLAB, and
+                reference/ (the R2015a recording and known differences).
 build.mjs       esbuild bundling script -> dist/ (main.js and worker.js).
 ```
 

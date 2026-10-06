@@ -101,8 +101,10 @@ export const ROWS = [
   ['isscalar([])', 'logical', [1, 1], [0]],
   ["isscalar('a')", 'logical', [1, 1], [1]],
   ['ismatrix([])', 'logical', [1, 1], [1]],
+  ['isreal(1i)', 'logical', [1, 1], [0]],
+  ['isreal(complex(1, 0))', 'logical', [1, 1], [0]],
+  ['isreal(1)', 'logical', [1, 1], [1]],
   ['iscomplex(1i)', 'logical', [1, 1], [1]],
-  ['iscomplex(complex(1, 0))', 'logical', [1, 1], [1]],
   ['iscomplex(1)', 'logical', [1, 1], [0]],
   ['islogical(true)', 'logical', [1, 1], [1]],
   ['islogical(1)', 'logical', [1, 1], [0]],
@@ -288,7 +290,7 @@ export const ROWS = [
   ["strcmpi('ABC', 'abc')", 'logical', [1, 1], [1]],
   ["strcmpi({'a', 'B'}, 'b')", 'logical', [1, 2], [0, 1]],
   ["strfind('abcbc', 'bc')", 'double', [1, 2], [2, 4]],
-  ["strfind('abc', 'x')", 'double', [1, 0], []],
+  ["strfind('abc', 'x')", 'double', [0, 0], []],
 
   // ---- cells and structs ----
   ['num2cell([1 2])', 'cell', [1, 2], null],

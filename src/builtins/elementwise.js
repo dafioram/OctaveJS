@@ -104,7 +104,6 @@ export function registerElementwise(reg) {
   reg.set('sqrt', { fn: unary(C.csqrt) });
   reg.set('abs', { fn: unaryRealOut(C.cabs) });
   reg.set('angle', { fn: unaryRealOut(C.cangle) });
-  reg.set('arg', { fn: unaryRealOut(C.cangle) });
   reg.set('real', { fn: unaryRealOut((r) => r) });
   reg.set('imag', { fn: unaryRealOut((_r, i) => i) });
   reg.set('conj', { fn: unary(C.cconj) });
@@ -136,7 +135,13 @@ export function registerElementwise(reg) {
   reg.set('mod', { fn: binaryReal((a, b) => { if (b === 0) return a; const r = a - Math.floor(a / b) * b; return r; }) });
   reg.set('rem', { fn: binaryReal((a, b) => { if (b === 0) return NaN; const r = a - Math.trunc(a / b) * b; return r; }) });
   reg.set('power', { fn: (args) => [Mat.broadcastBinary(args[0], args[1], C.cpow)] });
-  reg.set('hypot', { fn: binaryReal((a, b) => Math.hypot(a, b)) });
+  // hypot of complex values uses their magnitudes.
+  reg.set('hypot', {
+    fn: (args) => {
+      if (args.length !== 2) throw argCountError(args.length, 2);
+      return [Mat.broadcastBinary(args[0], args[1], (ar, ai, br, bi) => [Math.hypot(ar, ai, br, bi), 0])];
+    },
+  });
   registerMoreElementary(reg);
 }
 
@@ -155,6 +160,12 @@ function cacosh(r, i) { // log(z + sqrt(z + 1) * sqrt(z - 1))
   return C.clog(r + pr, i + pi);
 }
 function catanh(r, i) { // log((1 + z) / (1 - z)) / 2
+  // Real x outside [-1, 1] (and +-Inf), as MATLAB: the imaginary part
+  // takes the sign of x.
+  if (i === 0 && Math.abs(r) > 1) {
+    const re = r === Infinity || r === -Infinity ? 0 : Math.atanh(1 / r);
+    return [re, Math.sign(r) * Math.PI / 2];
+  }
   const [qr, qi] = C.cdiv(1 + r, i, 1 - r, -i);
   const [lr, li] = C.clog(qr, qi);
   return [lr / 2, li / 2];
@@ -206,7 +217,7 @@ function registerMoreElementary(reg) {
   set('atanh', catanh, inUnit(Math.atanh));
   set('asech', (r, i) => cacosh(...recip([r, i])), (x) => (x > 0 && x <= 1) || Number.isNaN(x) ? Math.acosh(1 / x) : undefined);
   set('acsch', (r, i) => casinh(...recip([r, i])), (x) => Math.asinh(1 / x));
-  set('acoth', (r, i) => catanh(...recip([r, i])), (x) => (Math.abs(x) >= 1 || Number.isNaN(x) ? Math.atanh(1 / x) : undefined));
+  set('acoth', (r, i) => (r === 0 && i === 0 ? [0, Math.PI / 2] : catanh(...recip([r, i]))), (x) => (Math.abs(x) >= 1 || Number.isNaN(x) ? Math.atanh(1 / x) : undefined));
 
   // degree-based trigonometry
   set('sind', degIn(C.csin), sind);
@@ -232,7 +243,8 @@ function registerMoreElementary(reg) {
   reg.set('pow2', {
     fn: (args) => {
       if (args.length === 1) return [Mat.broadcastBinary(Mat.scalar(2), args[0], C.cpow)];
-      return [Mat.broadcastBinary(args[0], args[1], (fr, fi, er) => [fr * 2 ** er, fi * 2 ** er])];
+      // pow2(F, E) = F .* 2.^E with E truncated to an integer (C's ldexp), as MATLAB.
+      return [Mat.broadcastBinary(args[0], args[1], (fr, fi, er) => [fr * 2 ** Math.trunc(er), fi * 2 ** Math.trunc(er)])];
     },
   });
   // nextpow2(n): the smallest p with 2^p >= abs(n)

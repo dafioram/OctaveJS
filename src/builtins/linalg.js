@@ -11,6 +11,8 @@ import * as math from 'mathjs';
 import { Mat, Cell, StructArray, MatlabError, shape2D } from '../core/values.js';
 import { _registerLinalgHooks, transposeContainer } from '../core/interpreter.js';
 import { finiteScalarArg } from './numutil.js';
+import { householderQR, formQ, formR, qrSolve } from './qr.js';
+import { doSprintf } from './format.js';
 
 function toRowMajor(mat) {
   const rows = [];
@@ -55,32 +57,6 @@ function requireSquare(mat, fname) {
   if (mat.rows !== mat.cols) throw new MatlabError(`${fname}: expected a square matrix, got ${mat.sizeStr()}`);
 }
 
-// ---------------- rank (Gaussian elimination, real matrices) ----------------
-export function computeRank(mat) {
-  if (mat.isComplex) throw new MatlabError('rank() of a complex matrix is not supported in this app; try rank(real(A)) or rank(abs(A)) as an approximation');
-  const m = mat.rows, n = mat.cols;
-  const a = [];
-  for (let r = 0; r < m; r++) { const row = []; for (let c = 0; c < n; c++) row.push(mat.get2(r, c)); a.push(row); }
-  let maxAbs = 0;
-  for (const row of a) for (const v of row) maxAbs = Math.max(maxAbs, Math.abs(v));
-  const tol = Math.max(m, n) * Number.EPSILON * (maxAbs || 1);
-  let rank = 0;
-  for (let col = 0; col < n && rank < m; col++) {
-    let pivotRow = -1, pivotVal = tol;
-    for (let r = rank; r < m; r++) if (Math.abs(a[r][col]) > pivotVal) { pivotVal = Math.abs(a[r][col]); pivotRow = r; }
-    if (pivotRow === -1) continue;
-    [a[rank], a[pivotRow]] = [a[pivotRow], a[rank]];
-    for (let r = 0; r < m; r++) {
-      if (r === rank) continue;
-      const factor = a[r][col] / a[rank][col];
-      if (factor === 0) continue;
-      for (let c = col; c < n; c++) a[r][c] -= factor * a[rank][c];
-    }
-    rank++;
-  }
-  return rank;
-}
-
 // ---------------- SVD (one-sided Jacobi rotation, real matrices) ----------------
 // Classic one-sided Jacobi SVD: iteratively rotate pairs of columns of a
 // working copy of A until they're numerically orthogonal; singular values
@@ -122,6 +98,26 @@ export function singularValues(mat) {
     E.set2(r + m, c, im); E.set2(r, c + n, -im);
   }
   return computeSVD(E).singularValues.filter((_, k) => k % 2 === 0);
+}
+
+// The Moore-Penrose pseudoinverse of a real matrix from its SVD; tolArg is
+// pinv's optional tolerance (an empty or NaN tolerance keeps nothing).
+function pseudoInverse(a, tolArg) {
+  const { U, V, singularValues: s } = computeSVD(a, true);
+  const m = a.rows, n = a.cols;
+  let tol;
+  if (tolArg === undefined) tol = Math.max(m, n) * (s[0] > 0 ? 2 ** (Math.floor(Math.log2(s[0])) - 52) : 0);
+  else tol = tolArg.isEmpty ? Infinity : tolArg.toScalarNumber();
+  const out = Mat.zeros(n, m);
+  s.forEach((sv, k) => {
+    if (!(sv > tol)) return;
+    for (let c = 0; c < m; c++) {
+      const u = U.re[k * m + c] / sv;
+      if (u === 0) continue;
+      for (let r = 0; r < n; r++) out.re[c * n + r] += V.re[k * n + r] * u;
+    }
+  });
+  return out;
 }
 
 // One-sided Jacobi SVD. U and V are full square orthonormal matrices
@@ -629,7 +625,16 @@ export function registerLinalg(reg) {
     },
   });
   reg.set('length', { fn: (args) => [Mat.scalar(args[0].isEmpty ? 0 : Math.max(args[0].rows, args[0].cols))] });
-  reg.set('numel', { fn: (args) => [Mat.scalar(args[0].numel)] });
+  // numel(A) | numel(A, i1, i2, ...): the number of elements A(i1, i2, ...)
+  // would have (each index's count; ':' is the whole dimension).
+  reg.set('numel', {
+    fn: (args) => {
+      if (args.length === 1) return [Mat.scalar(args[0].numel)];
+      const a = args[0], idx = args.slice(1);
+      const dimLen = (k) => (idx.length === 1 ? a.numel : k === 0 ? a.rows : k === 1 ? a.cols : 1);
+      return [Mat.scalar(idx.reduce((n, v, k) => n * (v instanceof Mat && v.isChar && v.numel === 1 && v.re[0] === 58 ? dimLen(k) : v.numel), 1))];
+    },
+  });
   reg.set('ndims', { fn: () => [Mat.scalar(2)] });
   reg.set('isrow', { fn: (args) => [Mat.logicalScalar(args[0].rows === 1)] });
   reg.set('iscolumn', { fn: (args) => [Mat.logicalScalar(args[0].cols === 1)] });
@@ -669,6 +674,7 @@ export function registerLinalg(reg) {
     fn: (args) => {
       const a = args[0];
       const k = args.length >= 2 ? Math.round(finiteScalarArg(args[1], 'diag', 'K')) : 0;
+      if (a.isEmpty) return [Mat.empty()];
       if (a.isVector && a.numel > 1) {
         const n = a.numel + Math.abs(k);
         const out = Mat.zeros(n, n);
@@ -683,7 +689,7 @@ export function registerLinalg(reg) {
       const im = a.isComplex ? new Float64Array(len) : null;
       for (let i = 0; i < len; i++) {
         const r = k >= 0 ? i : i - k, c = k >= 0 ? i + k : i;
-        re[i] = a.get2(r, c);
+        re[i] = a.re[c * a.rows + r];
         if (im) im[i] = a.isComplex ? a.im[c * a.rows + r] : 0;
       }
       return [new Mat(len, 1, re, im)];
@@ -726,15 +732,53 @@ export function registerLinalg(reg) {
       return [im !== 0 ? Mat.complexScalar(re, im) : Mat.scalar(re)];
     },
   });
-  reg.set('rank', { fn: (args) => [Mat.scalar(computeRank(args[0]))] });
+  // rank(A) | rank(A, tol): the singular values above tol (default
+  // max(size(A))*eps(max(s))), as MATLAB.
+  reg.set('rank', {
+    fn: (args) => {
+      const a = args[0];
+      if (!(a instanceof Mat) || a.isChar) throw new MatlabError('rank: input must be numeric');
+      const s = singularValues(a);
+      const smax = s.length ? s[0] : 0;
+      const tol = args.length >= 2 ? args[1].toScalarNumber() : Math.max(a.rows, a.cols) * (smax > 0 ? 2 ** (Math.floor(Math.log2(smax)) - 52) : 0);
+      return [Mat.scalar(s.filter(v => v > tol).length)];
+    },
+  });
   reg.set('inv', { fn: (args, _n, ctx) => [ctx.interp.reportWarnings(inverse(args[0]))] });
-  reg.set('pinv', { fn: (args) => [args[0].isEmpty ? Mat.zeros(args[0].cols, args[0].rows) : fromRowMajor(math.pinv(toRowMajor(args[0])))] });
+  // pinv(A) | pinv(A, tol): V*diag(1./s)*U' over the singular values above
+  // tol (default max(size(A))*eps(norm(A))). A complex A = B + iC goes
+  // through the real [B -C; C B], whose pseudoinverse is the same
+  // embedding of pinv(A).
+  reg.set('pinv', {
+    fn: (args) => {
+      const a = args[0];
+      if (!(a instanceof Mat) || a.isChar) throw new MatlabError('pinv: input must be numeric');
+      const m = a.rows, n = a.cols;
+      if (a.isEmpty) return [Mat.zeros(n, m)];
+      if (a.isComplex) {
+        const E = Mat.zeros(2 * m, 2 * n);
+        for (let c = 0; c < n; c++) for (let r = 0; r < m; r++) {
+          const re = a.re[c * m + r], im = a.im[c * m + r];
+          E.set2(r, c, re); E.set2(r + m, c + n, re); E.set2(r + m, c, im); E.set2(r, c + n, -im);
+        }
+        const P = pseudoInverse(E, args[1]);
+        const out = new Mat(n, m, new Float64Array(n * m), new Float64Array(n * m));
+        for (let c = 0; c < m; c++) for (let r = 0; r < n; r++) { out.re[c * n + r] = P.get2(r, c); out.im[c * n + r] = P.get2(r + n, c); }
+        return [out];
+      }
+      return [pseudoInverse(a, args[1])];
+    },
+  });
 
   reg.set('dot', {
     fn: (args) => {
       const a = args[0], b = args[1];
       if (a.numel !== b.numel) throw new MatlabError('dot: vectors must have the same length');
       let re = 0, im = 0;
+      if (!a.isComplex && !b.isComplex) {
+        for (let k = 0; k < a.numel; k++) re += a.re[k] * b.re[k];
+        return [Mat.scalar(re)];
+      }
       for (let k = 0; k < a.numel; k++) {
         const ar = a.re[k], ai = a.isComplex ? -a.im[k] : 0; // conj(a)
         const br = b.re[k], bi = b.isComplex ? b.im[k] : 0;
@@ -935,11 +979,35 @@ export function registerLinalg(reg) {
     },
   });
 
+  // R = qr(A) | [Q, R] = qr(A) | [Q, R, E] = qr(A) (A*E = Q*R, columns
+  // pivoted by decreasing norm) | qr(A, 0) / qr(A, 'econ') (economy size;
+  // with three outputs E is a permutation vector) | qr(A, 'vector'):
+  // Householder QR with LAPACK's sign conventions, as MATLAB.
   reg.set('qr', {
-    fn: (args) => {
-      if (args[0].isEmpty) return [identity(args[0].rows), Mat.zeros(args[0].rows, args[0].cols)];
-      const { Q, R } = math.qr(toRowMajor(args[0]));
-      return [fromRowMajor(Q.valueOf ? Q.valueOf() : Q), fromRowMajor(R.valueOf ? R.valueOf() : R)];
+    fn: (args, nargout) => {
+      const a = args[0];
+      if (!(a instanceof Mat) || a.isChar) throw new MatlabError('qr: input must be numeric');
+      let econ = false, vector = false;
+      if (args.length >= 2) {
+        const o = args[1];
+        const t = o.isChar ? o.toJSString().toLowerCase() : null;
+        if (t === 'econ') { econ = true; vector = true; }
+        else if (t === 'vector') vector = true;
+        else if (t === 'matrix') vector = false;
+        else if (!o.isChar && o.numel === 1 && o.re[0] === 0) { econ = true; vector = true; }
+        else throw new MatlabError("qr: the second argument must be 0, 'econ', 'vector' or 'matrix'");
+      }
+      const m = a.rows, n = a.cols;
+      const f = householderQR(a, nargout >= 3);
+      const k = econ ? Math.min(m, n) : m;
+      const R = formR(f, econ ? Math.min(m, n) : m);
+      if (nargout <= 1) return [R];
+      const Q = formQ(f, k);
+      if (nargout === 2) return [Q, R];
+      if (vector) return [Q, R, new Mat(1, n, Float64Array.from(f.perm, p => p + 1))];
+      const E = Mat.zeros(n, n);
+      f.perm.forEach((src, c) => { E.re[c * n + src] = 1; });
+      return [Q, R, E];
     },
   });
 
@@ -962,11 +1030,7 @@ export function registerLinalg(reg) {
     if (w) out.warnings = [w];
     return out;
   }
-  // math.js's lusolve only accepts a single-column right-hand side (verified
-  // directly: passing a multi-column matrix throws "Matrix columns must
-  // match vector length"), so for A\B with a matrix B we solve column by
-  // column and reassemble. Entries may be math.js Complex values, so the
-  // result keeps imaginary parts rather than dropping them.
+  // x = A\B.
   function solve(a, b) {
     if (a.rows !== b.rows) throw new MatlabError('Matrix dimensions must agree.', 'MATLAB:dimagree');
     if (a.rows === a.cols && !a.isComplex && !b.isComplex) {
@@ -978,32 +1042,16 @@ export function registerLinalg(reg) {
       if (w) x.warnings = [w];
       return x;
     }
-    let A = toRowMajor(a), B = toRowMajor(b);
-    if (a.rows !== a.cols) {
-      // Overdetermined/underdetermined: least-squares via the normal
-      // equations A'A x = A'b, with A' the conjugate transpose. (Less
-      // numerically stable than MATLAB's QR-based mldivide — see README.)
-      const Ah = math.ctranspose(A);
-      A = math.multiply(Ah, A);
-      B = math.multiply(Ah, B);
+    // Non-square (or complex): QR with column pivoting, as MATLAB — the
+    // least-squares solution for tall A, a basic solution for wide or
+    // rank-deficient A (with MATLAB's warning).
+    const { x, rank, tol } = qrSolve(a, b);
+    if (rank < Math.min(a.rows, a.cols)) {
+      x.warnings = [a.rows === a.cols
+        ? { message: 'Matrix is singular to working precision.', identifier: 'MATLAB:singularMatrix' }
+        : { message: `Rank deficient, rank = ${rank}, tol = ${doSprintf('%13.6e', [tol])}.`, identifier: 'MATLAB:rankDeficientMatrix' }];
     }
-    const n = a.cols, m = b.cols;
-    const re = new Float64Array(n * m);
-    let im = null;
-    for (let c = 0; c < m; c++) {
-      let x;
-      try {
-        x = math.lusolve(A, B.map(row => row[c]));
-      } catch (e) {
-        throw new MatlabError(`A\\b failed to solve (matrix may be singular): ${e.message}`);
-      }
-      (x.valueOf ? x.valueOf() : x).forEach((row, r) => {
-        const [vr, vi] = asComplexPair(Array.isArray(row) ? row[0] : row);
-        re[c * n + r] = vr;
-        if (vi !== 0) { if (!im) im = new Float64Array(n * m); im[c * n + r] = vi; }
-      });
-    }
-    return new Mat(n, m, re, im);
+    return x;
   }
   // ---- matrix functions and decompositions ----
   reg.set('expm', {
