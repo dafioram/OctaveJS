@@ -132,6 +132,32 @@ export class Interpreter {
     return this.runProgram(ast);
   }
 
+  // eval(code): runs MATLAB text in `scope`. With outputs requested, the
+  // text must be one expression and its values are returned.
+  evalString(code, scope, nargout) {
+    let ast;
+    try { ast = parse(code); } catch (e) { throw toMatlabError(e); }
+    if (nargout > 0) {
+      const stmt = ast.body.length === 1 ? ast.body[0] : null;
+      if (!stmt || stmt.type !== 'ExprStmt') throw new MatlabError("eval with outputs requires a single expression, such as eval('2 + 2').", 'MATLAB:eval:notAnExpression');
+      return this.evalForNargout(stmt.expr, scope, nargout);
+    }
+    this.runProgram(ast, scope);
+    return [];
+  }
+
+  // str2func: a function name, or the text of an anonymous function
+  // (which sees no workspace variables).
+  handleFromString(text) {
+    const t = text.trim();
+    if (!t.startsWith('@')) return new FunctionHandle({ name: t });
+    let ast;
+    try { ast = parse(t); } catch (e) { throw toMatlabError(e); }
+    const stmt = ast.body[0];
+    if (ast.body.length !== 1 || stmt.type !== 'ExprStmt' || stmt.expr.type !== 'AnonFunc') throw new MatlabError(`Invalid function handle text '${t}'.`);
+    return this.evalExpr(stmt.expr, new Scope(this));
+  }
+
   runProgram(ast, scope = this.workspace) {
     // Hoist function definitions first (script-local functions), matching
     // MATLAB script behavior where a function can be called before its
@@ -409,7 +435,7 @@ export class Interpreter {
       let s;
       if (isBlank) s = new StructArray(1, 1, []);
       else if (cur instanceof StructArray) s = this._own(cur, owned);
-      else throw new MatlabError('Field assignment to a non-structure array object.');
+      else throw new MatlabError('Unable to perform assignment because dot indexing is not supported for variables of this type.', 'MATLAB:dotAssignmentNotSupported');
       if (s.numel === 0) s = new StructArray(1, 1, s.fieldNames);
       if (s.numel !== 1) throw new MatlabError('Scalar structure required for this assignment.');
       const name = this._fieldName(acc, scope);
@@ -440,7 +466,7 @@ export class Interpreter {
       let s;
       if (isBlank) s = new StructArray(0, 0, []);
       else if (cur instanceof StructArray) s = this._own(cur, owned);
-      else throw new MatlabError('Field assignment to a non-structure array object.');
+      else throw new MatlabError('Unable to perform assignment because dot indexing is not supported for variables of this type.', 'MATLAB:dotAssignmentNotSupported');
       const sel = this._assignSelection(s, acc.args, scope);
       if (sel.positions.length !== 1) throw new MatlabError('Field assignment through ()-indexing needs exactly one struct element.');
       this._growContainer(s, sel);
@@ -603,7 +629,7 @@ export class Interpreter {
         rows = byRow ? arr.rows - which.size : arr.rows;
         cols = byRow ? arr.cols : arr.cols - which.size;
       } else {
-        throw new MatlabError("Deleting elements requires a full ':' on exactly one dimension, e.g. c(:,2) = []");
+        throw new MatlabError('A null assignment can have only one non-colon index.', 'MATLAB:null_assignment_multiple_indices');
       }
     } else throw new MatlabError('Indexing with more than 2 subscripts is not supported');
     const data = [];
@@ -823,7 +849,7 @@ export class Interpreter {
   evalUnary(node, scope) {
     const v = this.evalExpr(node.expr, scope);
     requireMatOperand(v, node.op);
-    if (node.op === '+') return v;
+    if (node.op === '+') return v.isChar || v.isLogical ? Mat.mapElementwise(v, (r, i) => [r, i]) : v; // +'ab' is double
     if (node.op === '-') return Mat.mapElementwise(v, (r, i) => [-r, -i]);
     if (node.op === '~') {
       const out = Mat.mapElementwise(v, (r, i) => {
@@ -1168,6 +1194,8 @@ export class Interpreter {
 
     if (rhs.isEmpty && !isFullColon) {
       const positions = new Set(this._resolvePositions(idxMat, mat.numel));
+      if (positions.size === 0) return mat;
+      for (const p of positions) if (p >= mat.numel) throw new MatlabError('Matrix index is out of range for deletion.', 'MATLAB:matrix:indexOutOfRangeForDeletion');
       return this._deleteLinear(mat, positions);
     }
 
@@ -1178,7 +1206,7 @@ export class Interpreter {
     const maxPos = positions.length ? Math.max(...positions) : -1;
     if (maxPos >= mat.numel) {
       if (!mat.isVector && mat.numel !== 0) {
-        throw new MatlabError('Cannot grow a non-vector matrix via linear indexing; use 2-subscript assignment instead');
+        throw new MatlabError('Attempt to grow array along ambiguous dimension.', 'MATLAB:indexed_matrix_cannot_be_resized');
       }
       mat = this._growVector(mat, maxPos + 1);
     }
@@ -1190,7 +1218,7 @@ export class Interpreter {
         mat.setLin(positions[k], rhs.re[k], rhs.isComplex ? rhs.im[k] : 0);
       }
     } else {
-      throw new MatlabError(`Cannot assign ${rhs.numel} values to ${positions.length} destination elements`);
+      throw new MatlabError('Unable to perform assignment because the left and right sides have a different number of elements.', 'MATLAB:matrix:assignmentNumelMismatch');
     }
     return mat;
   }
@@ -1213,7 +1241,7 @@ export class Interpreter {
         const rows = new Set(this._resolvePositions(rowIdxMat, mat.rows));
         return this._deleteRows(mat, rows);
       }
-      throw new MatlabError("Deleting elements requires a full ':' on exactly one dimension, e.g. A(:,2) = []");
+      throw new MatlabError('A null assignment can have only one non-colon index.', 'MATLAB:null_assignment_multiple_indices');
     }
 
     let rowSel = rowFull ? Array.from({ length: mat.rows }, (_, k) => k) : this._resolvePositions(rowIdxMat, mat.rows);
@@ -1238,7 +1266,7 @@ export class Interpreter {
         }
       }
     } else {
-      throw new MatlabError(`Cannot assign ${rhs.numel} values to ${total} destination elements`);
+      throw new MatlabError(`Unable to perform assignment because the size of the left side is ${rowSel.length}-by-${colSel.length} and the size of the right side is ${rhs.rows}-by-${rhs.cols}.`, 'MATLAB:subsassigndimmismatch');
     }
     return mat;
   }
@@ -1268,7 +1296,8 @@ export class Interpreter {
   _deleteLinear(mat, positionsSet) {
     const keep = [];
     for (let k = 0; k < mat.numel; k++) if (!positionsSet.has(k)) keep.push(k);
-    const asRow = mat.rows === 1;
+    // A column vector stays a column; anything else (a matrix too) becomes a row.
+    const asRow = !(mat.cols === 1 && mat.rows !== 1);
     const rows = asRow ? 1 : keep.length, cols = asRow ? keep.length : 1;
     const re = new Float64Array(keep.length);
     const im = mat.isComplex ? new Float64Array(keep.length) : null;
@@ -1319,7 +1348,7 @@ const MAX_RECURSION = 500;
 
 function requireMatOperand(v, op) {
   if (!(v instanceof Mat)) {
-    throw new MatlabError(`Operator '${op}' is not supported for operands of type '${valueClassName(v)}'`);
+    throw new MatlabError(`Operator '${op}' is not supported for operands of type '${valueClassName(v)}'.`);
   }
 }
 
@@ -1362,6 +1391,8 @@ function concatClass(mats) {
 // A's orientation; otherwise it takes the index's shape.
 function linearResultShape(arr, idx, n) {
   if (idx.isLogical) return arr.rows === 1 && arr.numel !== 1 ? [1, n] : (idx.rows === 1 && arr.numel === 1 ? [1, n] : [n, 1]);
+  // A matrix of indices shapes the result, even for a vector source.
+  if (!idx.isVector && !idx.isEmpty) return [idx.rows, idx.cols];
   if (arr.isVector && arr.numel !== 1) return arr.rows === 1 ? [1, n] : [n, 1];
   if (idx.isVector) return idx.rows === 1 ? [1, n] : [n, 1];
   return [idx.rows, idx.cols];
@@ -1479,7 +1510,7 @@ function matPower(a, b) {
   if (a.numel === 1 && b.numel === 1) return Mat.broadcastBinary(a, b, C.cpow);
   if (b.numel === 1 && Number.isInteger(b.re[0]) && !b.isComplex) {
     const n = b.re[0];
-    if (a.rows !== a.cols) throw new MatlabError('For A^n, A must be a square matrix');
+    if (a.rows !== a.cols) throw new MatlabError('Incorrect dimensions for raising a matrix to a power. Check that the matrix is square and the power is a scalar. To operate on each element of the matrix individually, use POWER (.^) for elementwise power.', 'MATLAB:mpower:notScalarAndSquareMatrix');
     if (n === 0) return identityLike(a.rows);
     let result = identityLike(a.rows);
     let base = n < 0 ? matInverse(a) : a;
@@ -1493,7 +1524,13 @@ function matPower(a, b) {
     if (warnings) result.warnings = warnings;
     return result;
   }
-  throw new MatlabError('Matrix power A^B with non-scalar, non-integer exponent is not supported');
+  // A^p with a non-integer p, or s^B: through the eigendecomposition.
+  const square = (m) => m.rows === m.cols;
+  if ((b.numel === 1 && square(a)) || (a.numel === 1 && square(b))) {
+    if (!_matPowerImpl) throw new MatlabError('Linear algebra backend not initialized');
+    return _matPowerImpl(a, b);
+  }
+  throw new MatlabError('Incorrect dimensions for raising a matrix to a power. Check that the matrix is square and the power is a scalar. To operate on each element of the matrix individually, use POWER (.^) for elementwise power.', 'MATLAB:mpower:notScalarAndSquareMatrix');
 }
 
 function identityLike(n) {
@@ -1504,8 +1541,8 @@ function identityLike(n) {
 
 // These delegate to builtins/linalg.js's solver via a late-bound reference
 // to avoid a circular import; set by builtins/index.js at registration time.
-let _matInverseImpl = null, _matSolveImpl = null;
-export function _registerLinalgHooks({ inverse, solve }) { _matInverseImpl = inverse; _matSolveImpl = solve; }
+let _matInverseImpl = null, _matSolveImpl = null, _matPowerImpl = null;
+export function _registerLinalgHooks({ inverse, solve, power }) { _matInverseImpl = inverse; _matSolveImpl = solve; _matPowerImpl = power; }
 function matInverse(a) {
   if (!_matInverseImpl) throw new MatlabError('Linear algebra backend not initialized');
   return _matInverseImpl(a);
@@ -1634,7 +1671,8 @@ export function formatMat(mat, style = 'short') {
     }
     return lines.join('\n');
   }
-  const long = style === 'long';
+  const long = style.startsWith('long');
+  const variant = style === 'shortg' || style === 'longg' ? 'g' : style === 'shorte' || style === 'longe' ? 'e' : '';
   const decimals = (mag) => (!long ? 4 : mag < 10 ? 15 : Math.max(15 - Math.floor(Math.log10(mag)), 1));
   const exp = (x) => fmtExp(x, long ? 15 : 4);
   if (mat.isComplex) return formatComplex(mat, decimals, exp);
@@ -1646,6 +1684,27 @@ export function formatMat(mat, style = 'short') {
     if (Math.abs(x) > maxAbs) maxAbs = Math.abs(x);
   };
   for (let k = 0; k < n; k++) { scan(mat.re[k]); if (mat.isComplex) scan(mat.im[k]); }
+
+  // format short g / long g: %g with 5 or 15 significant digits in
+  // columns 13 or 26 wide; format short e / long e: e-notation throughout.
+  // Integer-valued arrays show as integers in every format.
+  if (variant && !(allInt && maxAbs < 1e9)) {
+    const text = variant === 'g'
+      ? (x) => fmtSpecial(x) ?? fmtGeneral(x, long ? 15 : 5)
+      : (x) => fmtSpecial(x) ?? exp(x);
+    const lines = [];
+    for (let r = 0; r < mat.rows; r++) {
+      const row = [];
+      for (let c = 0; c < mat.cols; c++) row.push(text(mat.re[c * mat.rows + r]));
+      lines.push(row);
+    }
+    const width = Math.max(...lines.flat().map(t => t.length));
+    if (variant === 'g') {
+      const w = Math.max(long ? 26 : 13, width + 2);
+      return lines.map(row => row.map(t => t.padStart(w)).join('')).join('\n');
+    }
+    return lines.map(row => '   ' + row.map(t => t.padStart(width)).join('   ')).join('\n');
+  }
 
   let header = '';
   let fmt;
@@ -1674,11 +1733,14 @@ export function formatMat(mat, style = 'short') {
   const width = Math.max(...cells.flat().map(s => s.length), 1);
   // format short uses MATLAB's fixed column widths: integers (and
   // logicals) 6 characters wide, 12 once a value reaches 1000; decimals 10.
-  const fixedWidth = long ? 0 : allInt && maxAbs < 1e9 ? (maxAbs < 1000 ? 6 : 12) : (n > 1 || (maxAbs >= 1e-3 && maxAbs < 1e3) || maxAbs === 0) ? 10 : 0;
+  // format long keeps the integer widths; a format long scalar in
+  // e-notation is right-aligned in 26 columns.
+  const fixedWidth = allInt && maxAbs < 1e9 ? (maxAbs < 1000 ? 6 : 12) : long ? 0 : (n > 1 || (maxAbs >= 1e-3 && maxAbs < 1e3) || maxAbs === 0) ? 10 : 0;
   if (fixedWidth) {
     const w = Math.max(fixedWidth, width + 2);
     return header + cells.map(row => row.map(s => s.padStart(w)).join('')).join('\n');
   }
+  if (long && n === 1 && /e/.test(cells[0][0])) return cells[0][0].padStart(26);
   return header + cells.map(row => '   ' + row.map(s => s.padStart(width)).join('   ')).join('\n');
 }
 
@@ -1728,4 +1790,12 @@ function fmtSpecial(x) {
 // e-notation with MATLAB's two-digit exponent: 1.0000e-03, not 1.0000e-3.
 function fmtExp(x, digits = 4) {
   return x.toExponential(digits).replace(/e([+-])(\d)$/, 'e$10$2');
+}
+// %g with p significant digits (trailing zeros dropped).
+function fmtGeneral(x, p) {
+  if (x === 0) return '0';
+  const e = Number(x.toExponential(p - 1).split('e')[1]);
+  if (e < -4 || e >= p) return fmtExp(x, p - 1).replace(/\.?0+e/, 'e');
+  const t = x.toFixed(Math.max(p - 1 - e, 0));
+  return t.includes('.') ? t.replace(/\.?0+$/, '') : t;
 }

@@ -241,6 +241,39 @@ export function registerArrayOps(reg) {
   // [C, ia, ic] = unique(A) | unique(A, 'stable'). C is a row for row-vector
   // input and a column otherwise; ia (first occurrences) and ic satisfy
   // C = A(ia) and A = C(ic). Each NaN counts as distinct, as in MATLAB.
+  // unique(A, 'rows'): the distinct rows, in sorted (lexicographic) order
+  // or 'stable' order; ia picks each row's first (or 'last') occurrence.
+  function uniqueRows(a, nargout, stable, last) {
+    const R = a.rows, Cn = a.cols;
+    const rowKey = (r) => Array.from({ length: Cn }, (_, c) => `${a.re[c * R + r]}_${a.isComplex ? a.im[c * R + r] : 0}`).join('|');
+    const groups = new Map(), uniq = [], ic = new Float64Array(R);
+    for (let r = 0; r < R; r++) {
+      const hasNaN = Array.from({ length: Cn }, (_, c) => a.re[c * R + r]).some(Number.isNaN);
+      const key = hasNaN ? `nan${r}` : rowKey(r);
+      let g = groups.get(key);
+      if (g === undefined) { g = uniq.length; groups.set(key, g); uniq.push({ first: r, last: r, slot: g }); }
+      uniq[g].last = r;
+      ic[r] = g;
+    }
+    const cmp = (x, y) => {
+      for (let c = 0; c < Cn; c++) {
+        const p = a.re[c * R + x.first], q = a.re[c * R + y.first];
+        if (p === q) continue;
+        if (Number.isNaN(p)) return Number.isNaN(q) ? 0 : 1;
+        if (Number.isNaN(q)) return -1;
+        return p < q ? -1 : 1;
+      }
+      return x.first - y.first;
+    };
+    const order = stable ? uniq.slice() : uniq.slice().sort(cmp);
+    const rank = new Map(order.map((u, pos) => [u.slot, pos]));
+    const C = selectElements(a, order.length, Cn, Array.from({ length: order.length * Cn }, (_, k) => Math.floor(k / order.length) * R + order[k % order.length].first));
+    const out = [C];
+    if (nargout >= 2) out.push(new Mat(order.length, 1, Float64Array.from(order, u => (last ? u.last : u.first) + 1)));
+    if (nargout >= 3) out.push(new Mat(R, 1, Float64Array.from(ic, g => rank.get(g) + 1)));
+    return out;
+  }
+
   reg.set('unique', {
     fn: (args, nargout) => {
       const a = args[0];
@@ -258,12 +291,15 @@ export function registerArrayOps(reg) {
         if (nargout >= 3) out.push(new Mat(strs.length, 1, Float64Array.from(strs, s => rank.get(s) + 1)));
         return out;
       }
-      let stable = false;
+      let stable = false, last = false, rows = false;
       for (const opt of args.slice(1)) {
-        const o = opt.isChar ? opt.toJSString().toLowerCase() : '';
+        const o = opt instanceof Mat && opt.isChar ? opt.toJSString().toLowerCase() : '';
         if (o === 'stable') stable = true;
-        else if (o !== 'sorted') throw new MatlabError(`unique: unsupported option '${o}'`);
+        else if (o === 'last') last = true;
+        else if (o === 'rows') rows = true;
+        else if (o !== 'sorted' && o !== 'first') throw new MatlabError(`Invalid option '${o}'. Options are 'rows', 'first', 'last', 'stable' and 'sorted'.`, 'MATLAB:UNIQUE:UnknownInput');
       }
+      if (rows && a.cols !== 1 || rows && a.rows === 0) return uniqueRows(a, nargout, stable, last);
       const groups = new Map(); // key -> index into `uniq`
       const uniq = [];          // { re, im, first }
       const ic = new Float64Array(a.numel);
@@ -271,7 +307,8 @@ export function registerArrayOps(reg) {
         const re = a.re[k], im = a.isComplex ? a.im[k] : 0;
         const key = Number.isNaN(re) || Number.isNaN(im) ? `nan${k}` : `${re}_${im}`;
         let g = groups.get(key);
-        if (g === undefined) { g = uniq.length; groups.set(key, g); uniq.push({ re, im, first: k, slot: g }); }
+        if (g === undefined) { g = uniq.length; groups.set(key, g); uniq.push({ re, im, first: k, slot: g, last: k }); }
+        uniq[g].last = k;
         ic[k] = g;
       }
       const compare = sortComparator({ descending: false, nanFirst: false, byAbs: a.isComplex });
@@ -281,7 +318,7 @@ export function registerArrayOps(reg) {
       const re = new Float64Array(n), ia = new Float64Array(n);
       let im = null;
       order.forEach((u, pos) => {
-        re[pos] = u.re; ia[pos] = u.first + 1;
+        re[pos] = u.re; ia[pos] = (last ? u.last : u.first) + 1;
         if (u.im !== 0) { if (!im) im = new Float64Array(n); im[pos] = u.im; }
       });
       for (let k = 0; k < ic.length; k++) ic[k] = rank.get(ic[k]) + 1;

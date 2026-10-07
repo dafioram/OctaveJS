@@ -115,6 +115,12 @@ function setOperation(fname, args, nargout) {
     throw new MatlabError(`${fname}: both inputs must be cell arrays of text, or neither`);
   }
   const textMode = A instanceof Cell || B instanceof Cell;
+  // A char result: the numbers become character codes before comparing,
+  // so union('ab', NaN) puts char(0) first, as MATLAB.
+  if (!textMode && !A.isComplex && !B.isComplex && !(A.isChar && B.isChar) && (A.isChar || (B.isChar && fname !== 'setdiff'))) {
+    const asChar = (m) => (m.isChar ? m : new Mat(m.rows, m.cols, Float64Array.from(m.re, charCode), null, { isChar: true }));
+    return setOperation(fname, [asChar(A), asChar(B), ...args.slice(2)], nargout);
+  }
   const ia0 = itemsOf(textMode && !(A instanceof Cell) ? new Cell(0, 0, []) : A, rows, fname);
   const ib0 = itemsOf(textMode && !(B instanceof Cell) ? new Cell(0, 0, []) : B, rows, fname);
   if (rows && A.numel && B.numel && A.cols !== B.cols) throw new MatlabError(`${fname}: A and B must have the same number of columns with 'rows'`);

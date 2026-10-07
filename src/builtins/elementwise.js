@@ -49,6 +49,7 @@ function casin(r, i) {
 }
 // acos(z) = -i * log(z + i*sqrt(1 - z^2))
 function cacos(r, i) {
+  if (i === 0 && (r === Infinity || r === -Infinity)) return r > 0 ? [0, Infinity] : [Math.PI, -Infinity];
   const z2 = C.cmul(r, i, r, i);
   const oneMinusZ2 = [1 - z2[0], -z2[1]];
   const sq = C.csqrt(oneMinusZ2[0], oneMinusZ2[1]);
@@ -59,6 +60,7 @@ function cacos(r, i) {
 }
 // atan(z) = (i/2) * log((i+z)/(i-z))
 function catan(r, i) {
+  if (r === 0 && (i === 1 || i === -1)) return [0, i * Infinity]; // the branch points: atan(1i) is Inf*1i
   const num = [r, i + 1];
   const den = [-r, 1 - i];
   const q = C.cdiv(num[0], num[1], den[0], den[1]);
@@ -73,7 +75,7 @@ export function registerElementwise(reg) {
   reg.set('asin', { fn: unary(casin, inUnit(Math.asin)) });
   reg.set('acos', { fn: unary(cacos, inUnit(Math.acos)) });
   reg.set('atan', { fn: unary(catan, Math.atan) });
-  reg.set('atan2', { fn: binaryReal((y, x) => Math.atan2(y, x)) });
+  reg.set('atan2', { fn: binaryReal((y, x) => Math.atan2(y, x === 0 ? 0 : x)) }); // atan2(0, -0) is 0 in MATLAB
   reg.set('sinh', { fn: unary(csinh, Math.sinh) });
   reg.set('cosh', { fn: unary(ccosh, Math.cosh) });
   reg.set('tanh', { fn: unary(ctanh, Math.tanh) });

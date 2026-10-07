@@ -125,5 +125,5 @@ export function registerLogic(reg) {
     },
   });
   reg.set('uminus', { fn: (args) => [Mat.mapElementwise(truth(args[0]), (r, i) => [-r, -i])] });
-  reg.set('uplus', { fn: (args) => [truth(args[0])] });
+  reg.set('uplus', { fn: (args) => { const v = truth(args[0]); return [v.isChar || v.isLogical ? Mat.mapElementwise(v, (r, i) => [r, i]) : v]; } });
 }

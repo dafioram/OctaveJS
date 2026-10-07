@@ -43,6 +43,7 @@ export function csqrt(ar, ai) {
   return [re, im];
 }
 export function cpow(ar, ai, br, bi) {
+  if (Number.isNaN(ar) || Number.isNaN(ai)) return [NaN, ai === 0 && bi === 0 ? 0 : NaN]; // NaN^0 is NaN in MATLAB
   if (ar === 0 && ai === 0) {
     if (br === 0 && bi === 0) return [1, 0];
     return [0, 0];
@@ -53,6 +54,16 @@ export function cpow(ar, ai, br, bi) {
   // exponent, so only take this path when the result is genuinely real.
   if (ai === 0 && bi === 0 && (!(ar < 0) || Number.isInteger(br) || Number.isNaN(br))) {
     return [Math.pow(ar, br), 0];
+  }
+  // A complex base with a real integer exponent: repeated multiplication,
+  // as MATLAB does, so 1i^2 is exactly -1.
+  if (bi === 0 && Number.isInteger(br) && Math.abs(br) <= 1024) {
+    let rr = 1, ri = 0, xr = ar, xi = ai;
+    for (let e = Math.abs(br); e > 0; e >>= 1) {
+      if (e & 1) [rr, ri] = cmul(rr, ri, xr, xi);
+      [xr, xi] = cmul(xr, xi, xr, xi);
+    }
+    return br < 0 ? cdiv(1, 0, rr, ri) : [rr, ri];
   }
   // a^b = exp(b * log(a))
   const [lr, li] = clog(ar, ai);

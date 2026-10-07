@@ -15,6 +15,8 @@ function textOf(v, what) {
 // Sizes from (n), (m, n) or ([m n]) arguments, as used by cell().
 function sizeArgs(args) {
   if (args.length === 0) return [0, 0];
+  // An empty argument counts as 0 whatever its type (cell('') is {}).
+  for (const a of args) if (!a.isEmpty && (!(a instanceof Mat) || a.isChar)) throw new MatlabError(`Conversion to cell from ${valueClassName(a)} is not possible.`, 'MATLAB:invalidConversion');
   return shapeArgs(args, 'cell');
 }
 
@@ -106,7 +108,11 @@ export function registerContainers(reg) {
       const inputs = positional.slice(1);
       if (!inputs.every(x => x instanceof Cell)) throw new MatlabError('cellfun: inputs must be cell arrays (use arrayfun for other arrays)');
       const uniform = opts.uniformoutput ? opts.uniformoutput.isTruthy() : true;
-      return mapElements(ctx, 'cellfun', toHandle(positional[0]), inputs, (c, k) => c.data[k], nargout, uniform);
+      const out = mapElements(ctx, 'cellfun', toHandle(positional[0]), inputs, (c, k) => c.data[k], nargout, uniform);
+      // The legacy names that test something give logical results even
+      // for an empty cell (cellfun('isempty', {}) is a 0x0 logical).
+      if (uniform && out[0] instanceof Mat && out[0].isEmpty && isText(positional[0]) && ['isempty', 'islogical', 'isreal'].includes(positional[0].toJSString())) out[0].isLogical = true;
+      return out;
     },
   });
   reg.set('arrayfun', {
@@ -140,7 +146,8 @@ export function registerContainers(reg) {
       const c = args[0];
       if (!(c instanceof Cell)) throw new MatlabError('cell2mat: input must be a cell array');
       if (c.isEmpty) return [Mat.empty()];
-      if (c.data.some(v => v instanceof Cell)) throw new MatlabError('cell2mat: cell arrays inside the cell array are not supported');
+      if (c.data.some(v => v instanceof Cell || v instanceof FunctionHandle)) throw new MatlabError('CELL2MAT does not support cell arrays containing cell arrays or objects.', 'MATLAB:cell2mat:UnsupportedCellContent');
+      if (new Set(c.data.map(valueClassName)).size > 1) throw new MatlabError('All contents of the input cell array must be of the same data type.', 'MATLAB:cell2mat:MixedDataTypes');
       const rows = [];
       for (let r = 0; r < c.rows; r++) {
         const row = [];
@@ -195,7 +202,7 @@ export function registerContainers(reg) {
       const c = args[0];
       if (!(c instanceof Cell) || !c.isCellstr()) throw new MatlabError('strjoin: first input must be a cell array of character vectors');
       const delim = args.length >= 2 ? unescapeDelim(textOf(args[1], 'strjoin: delimiter')) : ' ';
-      return [Mat.fromString(c.data.map(v => v.toJSString()).join(delim))];
+      return [textValue(c.data.map(v => v.toJSString()).join(delim))];
     },
   });
 
@@ -234,7 +241,7 @@ export function registerContainers(reg) {
 
   reg.set('fieldnames', {
     fn: (args) => {
-      if (!(args[0] instanceof StructArray)) throw new MatlabError('fieldnames: input must be a struct');
+      if (!(args[0] instanceof StructArray)) throw new MatlabError(`Invalid input argument of type '${valueClassName(args[0])}'. Input must be a structure or a Java or COM object.`, 'MATLAB:fieldnames:InvalidInput');
       return [makeCellstrColumn(args[0].fieldNames)];
     },
   });
@@ -251,6 +258,31 @@ export function registerContainers(reg) {
         return [out];
       }
       return [Mat.logicalScalar(isText(f) && has(f.toJSString()))];
+    },
+  });
+
+  // orderfields(s) sorts the fields (by character code); orderfields(s, t)
+  // takes t's order (t a struct, a cellstr of names or a permutation
+  // vector). [s, perm] = orderfields(...) also returns the permutation.
+  reg.set('orderfields', {
+    fn: (args, nargout) => {
+      const s = args[0];
+      if (!(s instanceof StructArray)) throw new MatlabError('First argument must be a struct.', 'MATLAB:orderfields:arg1NotStruct');
+      const names = s.fieldNames;
+      let order;
+      if (args.length < 2) order = [...names].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      else {
+        const t = args[1];
+        if (t instanceof StructArray) order = t.fieldNames;
+        else if (t instanceof Cell) order = t.data.map(v => textOf(v, 'orderfields: field name'));
+        else if (t instanceof Mat && !t.isChar) order = Array.from(t.re, k => names[k - 1]);
+        else throw new MatlabError('Second argument must be a struct, a cell array of strings or a permutation vector.', 'MATLAB:orderfields:InvalidArg2');
+        const same = order.length === names.length && new Set(order).size === names.length && order.every(n => n !== undefined && names.includes(n));
+        if (!same) throw new MatlabError('The second argument must specify every field of the first, once.', 'MATLAB:orderfields:InvalidArg2');
+      }
+      const out = new StructArray(s.rows, s.cols, order, s.data.map(el => new Map(order.map(n => [n, el.get(n)]))), s.classOverride);
+      if (nargout < 2) return [out];
+      return [out, new Mat(order.length, 1, Float64Array.from(order, n => names.indexOf(n) + 1))];
     },
   });
 

@@ -267,7 +267,7 @@ function setup() {
   ({ layout } = h.plotly());
   check('image indexes the colormap directly', [layout.coloraxis.cmin, layout.coloraxis.cmax], [1, 256]);
   h.run('hi = image(magic(2)); cd = get(hi, \'CData\'); set(hi, \'CData\', [1 2; 3 4]);');
-  check('image CData get/set', [h.v('cd').re, h.plotly().data[0].z], [[4, 1, 3, 2], [[1, 2], [3, 4]]]);
+  check('image CData get/set', [h.v('cd').re, h.plotly().data[0].z], [[1, 4, 3, 2], [[1, 2], [3, 4]]]);
   checkThrows('bad clims', () => h.run('imagesc(magic(3), [2 1])'), /low < high/);
   checkThrows('image takes no clims', () => h.run('image(magic(3), [1 2])'), /expected image/);
 }
